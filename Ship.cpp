@@ -8,3 +8,42 @@
 using namespace ShipSpecs;
 
 // Default constructor
+Ship::Ship(){
+
+}
+
+Ship::Ship(Cannons can, Hull hul) {
+
+}
+
+void Ship::setCannons(Cannons can) {
+
+}
+
+Cannons Ship::getCannons() {
+    return cannons;
+}
+
+void Ship::setHull(Hull hul) {
+
+}
+
+Hull Ship::getHull() {
+    return hull;
+}
+
+int Ship::getHp() {
+    return hp;
+}
+
+int Ship::getAc() {
+    return ac;
+}
+
+int Ship::hit() {
+    // Returns d20 + cannonBuff to hit
+}
+
+int Ship::damage() {
+    // Returns damage based on cannon damage + cannonBuff
+}

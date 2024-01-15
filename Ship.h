@@ -35,5 +35,6 @@ public:
     Hull getHull();
     int getHp();
     int getAc();
-    int attack();
+    int hit();
+    int damage();
 }
