@@ -29,6 +29,7 @@ public:
     Ship(Cannons can, Hull hul);
 
     // Class functions
+    void updateArmor();
     void setCannons(Cannons can);
     Cannons getCannons();
     void setHull(Hull hul);
@@ -37,4 +38,4 @@ public:
     int getAc();
     int hit();
     int damage();
-}
+};
