@@ -4,6 +4,8 @@
 // HP and AC accordingly with hull, and returning an attack roll dependant on cannons.
 
 #include "Ship.h"
+#include <iostream>
+#include <random>
 
 using namespace ShipSpecs;
 
@@ -12,12 +14,14 @@ Ship::Ship(){
     cannons = Cannons::Iron;
     hull = Hull::Wood;
     updateArmor();
+    srand(time(0));
 }
 
 Ship::Ship(Cannons can, Hull hul) {
     cannons = can;
     hull = hul;
     updateArmor();
+    srand(time(0));
 }
 
 void Ship::updateArmor() {
@@ -47,6 +51,7 @@ Cannons Ship::getCannons() {
 
 void Ship::setHull(Hull hul) {
     hull = hul;
+    updateArmor();
 }
 
 Hull Ship::getHull() {
@@ -62,11 +67,39 @@ int Ship::getAc() {
 }
 
 int Ship::hit() {
-    // Returns d20 + cannonBuff to hit
-    return 20;
+    int returnHit = 0;
+
+    returnHit += rand() % 20 + 1;
+
+    switch (cannons) {
+        case Cannons::Iron:
+            returnHit += 2;
+            break;
+        case Cannons::Silver:
+            returnHit += 4;
+            break;
+        case Cannons::Gold:
+            returnHit += 6;
+            break;
+    }
+
+    return returnHit;
 }
 
 int Ship::damage() {
-    // Returns damage based on cannon damage + cannonBuff
-    return 20;
+    int returnDamage = 0;
+
+    switch (cannons) {
+        case Cannons::Iron:
+            returnDamage += rand() % 20 + 1;
+            break;
+        case Cannons::Silver:
+            returnDamage += rand() % 40 + 1;
+            break;
+        case Cannons::Gold:
+            returnDamage += rand() % 60 + 1;
+            break;
+    }
+
+    return returnDamage;
 }
