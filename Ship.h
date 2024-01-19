@@ -20,7 +20,9 @@ class Ship {
 private:
     Cannons cannons;
     Hull hull;
+    int wood;
     int hp;
+    int maxHp;
     int ac;
 
 public:
@@ -36,6 +38,8 @@ public:
     Hull getHull();
     int getHp();
     int getAc();
+    //void heal();
     int hit();
-    int damage();
+    int damageRoll();
+    void takeDamage(int damage);
 };

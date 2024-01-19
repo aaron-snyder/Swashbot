@@ -35,27 +35,40 @@ int main() {
     // Check average damage for default ship
     average = 0;
     for (int i = 0; i < 100; i++) {
-        average += ship1.damage();
+        average += ship1.damageRoll();
     }
     cout << "Average damage roll for Ship 1: " << average / 100 << endl << endl;
 
     // Check average damage for upgraded ship
     average = 0;
     for (int i = 0; i < 100; i++) {
-        average += ship2.damage();
+        average += ship2.damageRoll();
     }
     cout << "Average damage roll for Ship 2: " << average / 100 << endl << endl;
 
     battle(ship1, ship2);
+
+    Ship ship3;
+    cout << endl;
+
+    battle(ship1, ship3);
 
     return 0;
 }
 
 void battle(Ship player, Ship enemy) {
     int userInput;
-    while (player.getHp() > 0 || enemy.getHp() > 0) {
-        cout << "Press 1 to hit, 2 to heal:" << endl;
-        cin >> userInput;
-        cout << "Number pressed: " << userInput << endl;
+    int turns = 0;
+    while (player.getHp() > 0 && enemy.getHp() > 0) {
+        turns++;
+        if (player.hit() >= enemy.getAc()) {
+            enemy.takeDamage(player.damageRoll());
+        }
+
+        if (enemy.hit() >= player.getAc()) {
+            player.takeDamage(enemy.damageRoll());
+        }
     }
+
+    cout << "Player HP: " << player.getHp() << endl << "Enemy HP: " << enemy.getHp() << endl << turns << "Turns" << endl;
 }
