@@ -14,12 +14,14 @@ Ship::Ship(){
     cannons = Cannons::Iron;
     hull = Hull::Wood;
     updateArmor();
+    wood = 10;
     srand(time(0));
 }
 
 Ship::Ship(Cannons can, Hull hul) {
     cannons = can;
     hull = hul;
+    wood = 10;
     updateArmor();
     srand(time(0));
 }
@@ -64,6 +66,16 @@ int Ship::getHp() {
 
 int Ship::getAc() {
     return ac;
+}
+
+void Ship::heal() {
+    if (hp < maxHp && wood > 0) {
+        wood--;
+        hp += rand() % 20 + 1;
+        if (hp > maxHp) {
+            hp = maxHp;
+        }
+    }
 }
 
 int Ship::hit() {

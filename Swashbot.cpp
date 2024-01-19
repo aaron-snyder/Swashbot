@@ -6,6 +6,8 @@
 
 using namespace std;
 
+void battle(Ship player, Ship enemy);
+
 int main() {
     // Seed random
     srand(time(0));
@@ -44,5 +46,16 @@ int main() {
     }
     cout << "Average damage roll for Ship 2: " << average / 100 << endl << endl;
 
+    battle(ship1, ship2);
+
     return 0;
+}
+
+void battle(Ship player, Ship enemy) {
+    int userInput;
+    while (player.getHp() > 0 || enemy.getHp() > 0) {
+        cout << "Press 1 to hit, 2 to heal:" << endl;
+        cin >> userInput;
+        cout << "Number pressed: " << userInput << endl;
+    }
 }
