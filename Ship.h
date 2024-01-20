@@ -1,6 +1,6 @@
 // Author: Aaron Snyder
-// File: Card.h
-// Class header file for the Ship object. Class allows ship to fire, and heal.
+// File: Ship.h
+// Class header file for the Ship object. Class allows ship to fire, roll for damage, and heal.
 
 #pragma once
 #include <iostream>

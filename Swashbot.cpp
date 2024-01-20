@@ -46,11 +46,14 @@ int main() {
     }
     cout << "Average damage roll for Ship 2: " << average / 100 << endl << endl;
 
+    // Simulate battle between basic ship and upgraded ship
     battle(ship1, ship2);
 
+    // Create 3rd ship, equal to first ship
     Ship ship3;
     cout << endl;
 
+    // Initiate battle between two equal ships
     battle(ship1, ship3);
 
     return 0;

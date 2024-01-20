@@ -17,6 +17,7 @@ Ship::Ship(){
     srand(time(0));
 }
 
+// Manual constructor
 Ship::Ship(Cannons can, Hull hul) {
     cannons = can;
     hull = hul;
@@ -24,6 +25,7 @@ Ship::Ship(Cannons can, Hull hul) {
     srand(time(0));
 }
 
+// Sets armor class based on current hull
 void Ship::updateArmor() {
     switch (hull) {
         case Hull::Wood:
@@ -66,6 +68,7 @@ int Ship::getAc() {
     return ac;
 }
 
+// Returns 1d20 + cannon buff to hit the target
 int Ship::hit() {
     int returnHit = 0;
 
@@ -86,6 +89,7 @@ int Ship::hit() {
     return returnHit;
 }
 
+// Rolls damage based on current cannons
 int Ship::damageRoll() {
     int returnDamage = 0;
 
@@ -104,6 +108,7 @@ int Ship::damageRoll() {
     return returnDamage;
 }
 
+// Removes hp
 void Ship::takeDamage(int damage) {
     hp -= damage;
 }
