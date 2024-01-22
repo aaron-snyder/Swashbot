@@ -12,50 +12,39 @@ int main() {
     // Seed random
     srand(time(0));
 
-    // Ensure both constructors work
-    Ship ship1;
-    cout << "Ship 1:" << endl << "AC: " << ship1.getAc() << endl << "HP: " << ship1.getHp() << endl << endl;
-    Ship ship2(ShipSpecs::Cannons::Gold, ShipSpecs::Hull::Crystal);
-    cout << "Ship 2:" << endl << "AC: " << ship2.getAc() << endl << "HP: " << ship2.getHp() << endl << endl;
-
-    // Check average hit for default ship
-    int average = 0;
-    for (int i = 0; i < 100; i++) {
-        average += ship1.hit();
-    }
-    cout << "Average hit roll for Ship 1: " << average / 100 << endl << endl;
-
-    // Check average hit for upgraded ship
-    average = 0;
-    for (int i = 0; i < 100; i++) {
-        average += ship2.hit();
-    }
-    cout << "Average hit roll for Ship 2: " << average / 100 << endl << endl;
-
-    // Check average damage for default ship
-    average = 0;
-    for (int i = 0; i < 100; i++) {
-        average += ship1.damageRoll();
-    }
-    cout << "Average damage roll for Ship 1: " << average / 100 << endl << endl;
-
-    // Check average damage for upgraded ship
-    average = 0;
-    for (int i = 0; i < 100; i++) {
-        average += ship2.damageRoll();
-    }
-    cout << "Average damage roll for Ship 2: " << average / 100 << endl << endl;
-
-    // Simulate battle between basic ship and upgraded ship
-    battle(ship1, ship2);
-
-    // Create 3rd ship, equal to first ship
-    Ship ship3;
-    cout << endl;
-
-    // Initiate battle between two equal ships
-    battle(ship1, ship3);
-
+    dpp::cluster bot("token");
+ 
+    bot.on_log(dpp::utility::cout_logger());
+ 
+    /* The event is fired when someone issues your commands */
+    bot.on_slashcommand([&bot](const dpp::slashcommand_t & event) {
+        /* Check which command they ran */
+        if (event.command.get_command_name() == "battle") {
+            event.reply("Finding ship");
+        } else if (event.command.get_command_name() == "fire") {
+            event.reply("Firing cannons");
+        } else if (event.command.get_command_name() == "heal") {
+            event.reply("Healing");
+        } else if (event.command.get_command_name() == "loot") {
+            event.reply("Looking for island");
+        }
+    });
+ 
+    bot.on_ready([&bot](const dpp::ready_t & event) {
+        if (dpp::run_once<struct register_bot_commands>()) {
+            /* Create some commands */
+            dpp::slashcommand pingcommand("battle", "Finds enemy ship", bot.me.id);
+            dpp::slashcommand pongcommand("fire", "Fires cannons", bot.me.id);
+            dpp::slashcommand dingcommand("heal", "Uses wood to heal ship", bot.me.id);
+            dpp::slashcommand dongcommand("loot", "Finds an island to loot", bot.me.id);
+ 
+            /* Register our commands in a list using bulk */
+            bot.global_bulk_command_create({ pingcommand, pongcommand, dingcommand, dongcommand });
+        }
+    });
+ 
+    bot.start(dpp::st_wait);
+ 
     return 0;
 }
 
@@ -75,22 +64,3 @@ void battle(Ship player, Ship enemy) {
 
     cout << "Player HP: " << player.getHp() << endl << "Enemy HP: " << enemy.getHp() << endl << turns << "Turns" << endl;
 }
-
-// Handle slash command
-//bot.on_slashcommand([](const dpp::slashcommand_t& event) {
-//	if (event.command.get_command_name() == "ping") {
-//		event.reply("Pong!");
-//	}
-//});
-
-
-
-/* Register slash command here in on_ready */
-//bot.on_ready([&bot](const dpp::ready_t& event) {
-//	/* Wrap command registration in run_once to make sure it doesnt run on every full reconnection */
-//	if (dpp::run_once<struct register_bot_commands>()) {
-//		bot.global_command_create(dpp::slashcommand("ping", "Ping pong!", bot.me.id));
-//	}
-//});
-
-
