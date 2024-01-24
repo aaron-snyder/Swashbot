@@ -9,6 +9,12 @@ using namespace std;
 void battle(Ship player, Ship enemy);
 
 int main() {
+    // Create player ship
+    Ship playerShip();
+
+    // Boolean combat determines if the player is currently in combat.
+    bool combat = false;
+
     // Seed random
     srand(time(0));
 
@@ -16,14 +22,26 @@ int main() {
  
     bot.on_log(dpp::utility::cout_logger());
  
-    /* The event is fired when someone issues your commands */
+    // Slash command is issued
     bot.on_slashcommand([&bot](const dpp::slashcommand_t & event) {
-        /* Check which command they ran */
+        // Check command and call appropriate function
         if (event.command.get_command_name() == "battle") {
-            event.reply("Finding ship");
+            if (combat) {
+                event.reply("Already in combat!");
+            } else {
+                event.reply("Finding ship");
+                combat = true;
+            }
+            
         } else if (event.command.get_command_name() == "fire") {
-            event.reply("Firing cannons");
+            if (combat) {
+                event.reply("Firing cannons");
+            } else {
+                event.reply("Not in combat!");
+            }
+            
         } else if (event.command.get_command_name() == "heal") {
+            if (playerShip.getHp())
             event.reply("Healing");
         } else if (event.command.get_command_name() == "loot") {
             event.reply("Looking for island");
@@ -32,17 +50,18 @@ int main() {
  
     bot.on_ready([&bot](const dpp::ready_t & event) {
         if (dpp::run_once<struct register_bot_commands>()) {
-            /* Create some commands */
-            dpp::slashcommand pingcommand("battle", "Finds enemy ship", bot.me.id);
-            dpp::slashcommand pongcommand("fire", "Fires cannons", bot.me.id);
-            dpp::slashcommand dingcommand("heal", "Uses wood to heal ship", bot.me.id);
-            dpp::slashcommand dongcommand("loot", "Finds an island to loot", bot.me.id);
+            // Create commands
+            dpp::slashcommand battlecommand("battle", "Finds enemy ship", bot.me.id);
+            dpp::slashcommand firecommand("fire", "Fires cannons", bot.me.id);
+            dpp::slashcommand healcommand("heal", "Uses wood to heal ship", bot.me.id);
+            dpp::slashcommand lootcommand("loot", "Finds an island to loot", bot.me.id);
  
-            /* Register our commands in a list using bulk */
+            // Register commands
             bot.global_bulk_command_create({ pingcommand, pongcommand, dingcommand, dongcommand });
         }
     });
  
+    // Start bot
     bot.start(dpp::st_wait);
  
     return 0;

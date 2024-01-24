@@ -37,8 +37,9 @@ public:
     void setHull(Hull hul);
     Hull getHull();
     int getHp();
+    int getMaxHp();
     int getAc();
-    //void heal();
+    void heal();
     int hit();
     int damageRoll();
     void takeDamage(int damage);

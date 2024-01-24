@@ -64,6 +64,10 @@ int Ship::getHp() {
     return hp;
 }
 
+int Ship::getMaxHp() {
+    return maxHp;
+}
+
 int Ship::getAc() {
     return ac;
 }
@@ -111,4 +115,9 @@ int Ship::damageRoll() {
 // Removes hp
 void Ship::takeDamage(int damage) {
     hp -= damage;
+}
+
+// Adds hp
+void Ship::heal() {
+    
 }
