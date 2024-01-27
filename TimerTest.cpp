@@ -4,6 +4,8 @@
 #include <functional>
 
 bool combat = false;
+bool looting = false;
+bool defending = true;
 
 void timer_start(std::function<void(void)> func, unsigned int interval)
 {
@@ -20,6 +22,8 @@ void timer_start(std::function<void(void)> func, unsigned int interval)
 
 void startCombat()
 {
+  looting = false;
+  defending = false;
   combat = true;
   std::cout << "Entered combat" << std::endl;
 }
