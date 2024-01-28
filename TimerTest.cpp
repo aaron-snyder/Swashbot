@@ -3,10 +3,12 @@
 #include <thread>
 #include <functional>
 #include <random>
+#include <string>
 
 bool combat = false;
 bool looting = false;
 bool defending = true;
+
 
 void timer_start(std::function<void(void)> func, unsigned int interval)
 {
@@ -45,19 +47,16 @@ void startDefending() {
 
 int main()
 {
-  srand (time(NULL));
-  switch (rand() % 3 + 1) {
-    case 1:
-      timer_start(startCombat, 1000);
-      break;
-    case 2:
-      timer_start(startLooting, 1000);
-      break;
-    case 3:
-      timer_start(startDefending, 1000);
-      break;
-  }
-  
+  std::string activity = "combat";
+  if (activity == "combat") {
+    timer_start(startCombat, 1000);
+  } else if (activity == "looting") {
+    timer_start(startLooting, 1000);
+  } else if (activiy == "defending") {
+    timer_start(startDefending, 1000);
+  } else {
+    std::cout << "Error processing activity." << std::endl;
+  } 
   while (true)
     ;
 }
