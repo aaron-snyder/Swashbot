@@ -2,6 +2,7 @@
 #include <chrono>
 #include <thread>
 #include <functional>
+#include <random>
 
 bool combat = false;
 bool looting = false;
@@ -28,9 +29,35 @@ void startCombat()
   std::cout << "Entered combat" << std::endl;
 }
 
+void startLooting() {
+  looting = true;
+  defending = false;
+  combat = false;
+  std::cout << "Started looting" << std::endl;
+}
+
+void startDefending() {
+  looting = false;
+  defending = true;
+  combat = false;
+  std::cout << "Started defending" << std::endl;
+}
+
 int main()
 {
-  timer_start(do_something, 1000);
+  srand (time(NULL));
+  switch (rand() % 3 + 1) {
+    case 1:
+      timer_start(startCombat, 1000);
+      break;
+    case 2:
+      timer_start(startLooting, 1000);
+      break;
+    case 3:
+      timer_start(startDefending, 1000);
+      break;
+  }
+  
   while (true)
     ;
 }
