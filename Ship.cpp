@@ -10,7 +10,9 @@
 using namespace ShipSpecs;
 
 // Default constructor
+// The player ship will always be instantiated here. Setting activity matters in the default constructor for this reason.
 Ship::Ship(){
+    activity = "idle";
     cannons = Cannons::Iron;
     hull = Hull::Wood;
     updateArmor();
@@ -18,6 +20,7 @@ Ship::Ship(){
 }
 
 // Manual constructor
+// Enemy ships will never use activity, so setting it is meaningless. activity is only to check timer behavior for the player ship.
 Ship::Ship(Cannons can, Hull hul) {
     cannons = can;
     hull = hul;
@@ -54,6 +57,14 @@ Cannons Ship::getCannons() {
 void Ship::setHull(Hull hul) {
     hull = hul;
     updateArmor();
+}
+
+void Ship::setActivity(std::string newActivity) {
+    activity = newActivity;
+}
+
+std::string Ship::getActivity() {
+    return activity;
 }
 
 Hull Ship::getHull() {
