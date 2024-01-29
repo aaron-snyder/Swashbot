@@ -1,19 +1,19 @@
 #include <iostream>
 #include <string>
 #include "Ship.h"
-
 #include <random>
 
 using namespace std;
 
 void battle(Ship player, Ship enemy);
+void startTimer(function<void(void)> func, unsigned int interval);
 
 int main() {
+
+    bool TIMER_GO;
+
     // Create player ship
     Ship playerShip();
-
-    // Boolean combat determines if the player is currently in combat.
-    bool combat = false;
 
     // Seed random
     srand(time(0));
@@ -25,26 +25,42 @@ int main() {
     // Slash command is issued
     bot.on_slashcommand([&bot](const dpp::slashcommand_t & event) {
         // Check command and call appropriate function
-        if (event.command.get_command_name() == "battle") {
-            if (combat) {
+        if (event.command.get_command_name() == "battle") 
+        {
+            if (playerShip.getActivity() == "combat") {
                 event.reply("Already in combat!");
             } else {
                 event.reply("Finding ship");
-                combat = true;
+                playerShip.setActivity("combat");
             }
             
-        } else if (event.command.get_command_name() == "fire") {
-            if (combat) {
+        } 
+        else if (event.command.get_command_name() == "fire") 
+        {
+            if (playerShip.getActivity() == "combat") {
                 event.reply("Firing cannons");
             } else {
                 event.reply("Not in combat!");
             }
-            
-        } else if (event.command.get_command_name() == "heal") {
-            if (playerShip.getHp())
-            event.reply("Healing");
-        } else if (event.command.get_command_name() == "loot") {
-            event.reply("Looking for island");
+        } 
+        else if (event.command.get_command_name() == "heal") 
+        {
+            if (playerShip.getHp() < playerShip.getMaxHp()) {
+                playerShip.heal();
+                event.reply("New HP: " + playerShip.getHp() + "/" + playerShip.getMaxHp())
+            } else {
+                event.reply("Already at max HP!");
+            }
+        } 
+        else if (event.command.get_command_name() == "loot") 
+        {
+            playerShip.setActivity("looting");
+            event.reply("Looting nearest island!");
+        } 
+        else if (event.command.get_command_name() == "hide") 
+        {
+            playerShip.setActivity("hiding");
+            event.reply("Dropping anchor in a nearby cove!");
         }
     });
  
@@ -55,9 +71,10 @@ int main() {
             dpp::slashcommand firecommand("fire", "Fires cannons", bot.me.id);
             dpp::slashcommand healcommand("heal", "Uses wood to heal ship", bot.me.id);
             dpp::slashcommand lootcommand("loot", "Finds an island to loot", bot.me.id);
+            dpp::slashcommand defendcommand("hide", "Finds a sneaky place to drop anchor", bot.me.id);
  
             // Register commands
-            bot.global_bulk_command_create({ pingcommand, pongcommand, dingcommand, dongcommand });
+            bot.global_bulk_command_create({ battlecommand, firecommand, healcommand, lootcommand, defendcommand });
         }
     });
  
@@ -65,6 +82,19 @@ int main() {
     bot.start(dpp::st_wait);
  
     return 0;
+}
+
+void timer_start(function<void(void)> func, unsigned int interval)
+{
+  std::thread([func, interval]()
+  { 
+    while (TIMER_GO)
+    { 
+      auto x = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval);
+      func();
+      std::this_thread::sleep_until(x);
+    }
+  }).detach();
 }
 
 void battle(Ship player, Ship enemy) {
