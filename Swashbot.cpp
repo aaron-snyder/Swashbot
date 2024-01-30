@@ -7,6 +7,7 @@ using namespace std;
 
 void battle(Ship player, Ship enemy);
 void startTimer(function<void(void)> func, unsigned int interval);
+void timerTick();
 
 int main() {
 
@@ -56,11 +57,15 @@ int main() {
         {
             playerShip.setActivity("looting");
             event.reply("Looting nearest island!");
+            TIMER_GO = false;
+            startTimer()
         } 
         else if (event.command.get_command_name() == "hide") 
         {
             playerShip.setActivity("hiding");
             event.reply("Dropping anchor in a nearby cove!");
+            TIMER_GO = false;
+            // Because hiding resembles pausing the game, no timer needs to be started.
         }
     });
  
@@ -84,8 +89,9 @@ int main() {
     return 0;
 }
 
-void timer_start(function<void(void)> func, unsigned int interval)
+void startTimer(function<void(void)> func, unsigned int interval)
 {
+  TIMER_GO = true;
   std::thread([func, interval]()
   { 
     while (TIMER_GO)

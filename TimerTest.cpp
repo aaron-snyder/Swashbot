@@ -5,16 +5,13 @@
 #include <random>
 #include <string>
 
-bool combat = false;
-bool looting = false;
-bool defending = true;
-
+bool TIMER_GO = false;
 
 void timer_start(std::function<void(void)> func, unsigned int interval)
 {
   std::thread([func, interval]()
   { 
-    while (true)
+    while (TIMER_GO)
     { 
       auto x = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval);
       func();
@@ -25,23 +22,14 @@ void timer_start(std::function<void(void)> func, unsigned int interval)
 
 void startCombat()
 {
-  looting = false;
-  defending = false;
-  combat = true;
   std::cout << "Entered combat" << std::endl;
 }
 
 void startLooting() {
-  looting = true;
-  defending = false;
-  combat = false;
   std::cout << "Started looting" << std::endl;
 }
 
 void startDefending() {
-  looting = false;
-  defending = true;
-  combat = false;
   std::cout << "Started defending" << std::endl;
 }
 
@@ -52,7 +40,7 @@ int main()
     timer_start(startCombat, 1000);
   } else if (activity == "looting") {
     timer_start(startLooting, 1000);
-  } else if (activiy == "defending") {
+  } else if (activity == "defending") {
     timer_start(startDefending, 1000);
   } else {
     std::cout << "Error processing activity." << std::endl;
