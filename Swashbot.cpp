@@ -8,7 +8,7 @@ using namespace std;
 
 void battle(Ship player, Ship enemy);
 void startTimer(function<void(void)> func, unsigned int interval);
-void timerTick();
+void startTimer();
 
 int main() {
 
