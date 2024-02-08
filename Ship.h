@@ -41,7 +41,7 @@ public:
     int getMaxHp();
     int getAc();
     void setActivity(std::string newActivity);
-    string getActivity();
+    std::string getActivity();
     void heal();
     int hit();
     int damageRoll();
