@@ -5,7 +5,7 @@
 #include "Ship.h"
 #include <dpp/dpp.h>
 
-const std::string    BOT_TOKEN    = "server token goes here!";
+const std::string BOT_TOKEN = "server token goes here!";
 
 int main() {
 	// Seed random
@@ -70,7 +70,7 @@ int main() {
 
 
 
-	/* Register slash command here in on_ready */
+	// Registering the commands
     bot.on_ready([&bot](const dpp::ready_t& event) {
         if (dpp::run_once<struct register_bot_commands>()) {
             // Create commands
@@ -85,7 +85,7 @@ int main() {
         }
         });
 
-	/* Start the bot */
+	// Start the bot
 	bot.start(dpp::st_wait);
 
 	return 0;
