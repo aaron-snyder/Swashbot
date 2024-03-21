@@ -8,11 +8,14 @@
 const std::string BOT_TOKEN = "server token goes here!";
 
 int main() {
+
 	// Seed random
 	srand(time(0));
 
 	// Create player ship
-	Ship playerShip; // Eventually, add checks here to load in previously saved player ships (guild logins?)
+	Ship playerShip;
+    // try: load playerShip.ser {playerShip = playerShip.ser}
+    // catch: file read error? {cout << "No previous ship found"}
 
 	// Create bot cluster
 	dpp::cluster bot(BOT_TOKEN);
@@ -20,14 +23,12 @@ int main() {
 	// Output simple log messages to stdout
 	bot.on_log(dpp::utility::cout_logger());
 
-
-
-	// Handle slash command
     // Slash command is issued
     bot.on_slashcommand([&](const dpp::slashcommand_t& event) {
         // Check command and call appropriate function
         if (event.command.get_command_name() == "battle")
         {
+            // If the player isn't in combat, start combat
             if (playerShip.getActivity() == "combat") {
                 event.reply("Already in combat!");
             }
@@ -39,6 +40,7 @@ int main() {
         }
         else if (event.command.get_command_name() == "fire")
         {
+            // If the player is in combat, make a roll to hit
             if (playerShip.getActivity() == "combat") {
                 event.reply("Firing cannons!");
             }
@@ -73,6 +75,7 @@ int main() {
 	// Registering the commands
     bot.on_ready([&bot](const dpp::ready_t& event) {
         if (dpp::run_once<struct register_bot_commands>()) {
+
             // Create commands
             dpp::slashcommand battlecommand("battle", "Finds enemy ship", bot.me.id);
             dpp::slashcommand firecommand("fire", "Fires cannons", bot.me.id);
