@@ -14,6 +14,7 @@ int main() {
 
 	// Create player ship
 	Ship playerShip;
+    Ship enemyShip;
     // try: load playerShip.ser {playerShip = playerShip.ser}
     // catch: file read error? {cout << "No previous ship found"}
 
@@ -42,7 +43,13 @@ int main() {
         {
             // If the player is in combat, make a roll to hit
             if (playerShip.getActivity() == "combat") {
-                event.reply("Firing cannons!");
+                if (playerShip.hit() > enemyShip.getAc()) {
+                    int damageRoll = playerShip.damageRoll();
+                    enemyShip.takeDamage(damageRoll);
+                    event.reply("Hit enemy for " + damageRoll + " damage!");
+                } else {
+                    event.reply("Attack missed!");
+                }
             }
             else {
                 event.reply("Not in combat!");
@@ -50,12 +57,14 @@ int main() {
         }
         else if (event.command.get_command_name() == "heal")
         {
-            if (playerShip.getHp() < playerShip.getMaxHp()) {
+            if (playerShip.getHp() < playerShip.getMaxHp() && playerShip.getWood() > 0) {
                 playerShip.heal();
                 event.reply("New HP: " + playerShip.getHp() + '/' + playerShip.getMaxHp());
             }
-            else {
+            else if (playerShip.getHp() == playerShip.getMaxHp()) {
                 event.reply("Already at max HP!");
+            } else {
+                event.reply("We're out of wood!");
             }
         }
         else if (event.command.get_command_name() == "loot")

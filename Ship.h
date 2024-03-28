@@ -40,6 +40,7 @@ public:
     int getHp();
     int getMaxHp();
     int getAc();
+    int getWood();
     void setActivity(std::string newActivity);
     std::string getActivity();
     void heal();

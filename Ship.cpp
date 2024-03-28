@@ -130,5 +130,13 @@ void Ship::takeDamage(int damage) {
 
 // Adds hp
 void Ship::heal() {
-    
+    hp += 20;
+    if (hp > maxHp) {
+        hp = maxHp;
+    }
+}
+
+// Getter for ship wood
+int Ship::getWood() {
+    return wood;
 }
