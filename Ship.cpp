@@ -11,7 +11,7 @@ using namespace ShipSpecs;
 
 // Default constructor
 // The player ship will always be instantiated here. Setting activity matters in the default constructor for this reason.
-Ship::Ship(){
+Ship::Ship() {
     activity = "idle";
     cannons = Cannons::Iron;
     hull = Hull::Wood;
@@ -31,18 +31,18 @@ Ship::Ship(Cannons can, Hull hul) {
 // Sets armor class based on current hull
 void Ship::updateArmor() {
     switch (hull) {
-        case Hull::Wood:
-            hp = 100;
-            ac = 12;
-            break;
-        case Hull::Steel:
-            hp = 200;
-            ac = 15;
-            break;
-        case Hull::Crystal:
-            hp = 300;
-            ac = 18;
-            break;
+    case Hull::Wood:
+        hp = 100;
+        ac = 12;
+        break;
+    case Hull::Steel:
+        hp = 200;
+        ac = 15;
+        break;
+    case Hull::Crystal:
+        hp = 300;
+        ac = 18;
+        break;
     }
 }
 
@@ -90,15 +90,15 @@ int Ship::hit() {
     returnHit += rand() % 20 + 1;
 
     switch (cannons) {
-        case Cannons::Iron:
-            returnHit += 2;
-            break;
-        case Cannons::Silver:
-            returnHit += 4;
-            break;
-        case Cannons::Gold:
-            returnHit += 6;
-            break;
+    case Cannons::Iron:
+        returnHit += 2;
+        break;
+    case Cannons::Silver:
+        returnHit += 4;
+        break;
+    case Cannons::Gold:
+        returnHit += 6;
+        break;
     }
 
     return returnHit;
@@ -109,15 +109,15 @@ int Ship::damageRoll() {
     int returnDamage = 0;
 
     switch (cannons) {
-        case Cannons::Iron:
-            returnDamage += rand() % 20 + 1;
-            break;
-        case Cannons::Silver:
-            returnDamage += rand() % 40 + 1;
-            break;
-        case Cannons::Gold:
-            returnDamage += rand() % 60 + 1;
-            break;
+    case Cannons::Iron:
+        returnDamage += rand() % 20 + 1;
+        break;
+    case Cannons::Silver:
+        returnDamage += rand() % 40 + 1;
+        break;
+    case Cannons::Gold:
+        returnDamage += rand() % 60 + 1;
+        break;
     }
 
     return returnDamage;
