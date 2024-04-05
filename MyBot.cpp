@@ -9,7 +9,7 @@
 #include <thread>
 #include <random>
 
-const std::string BOT_TOKEN = "MTE2NjE4MDc1NDk1NTQ0ODM5MA.GIZyQX.ZjrvymK3sc43SdiEjXVhZ9xst8TxaX319Y5lJs";
+const std::string BOT_TOKEN = "bot token goes here";
 
 int main() {
 
