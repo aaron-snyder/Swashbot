@@ -4,30 +4,29 @@
 #include "MyBot.h"
 #include "Ship.h"
 #include <dpp/dpp.h>
-// timer includes
-#include <chrono>
-#include <thread>
-#include <random>
 
-const std::string BOT_TOKEN = "bot token goes here";
+const std::string BOT_TOKEN = "server token goes here!";
+
+void enemyAttack(Ship enemyShip, Ship playerShip, const dpp::slashcommand_t& event) {
+
+}
 
 int main() {
 
-    // Seed random
-    srand(time(0));
+	// Seed random
+	srand(time(0));
 
-    // Create player ship
-    Ship playerShip;
+	// Create player ship
+	Ship playerShip;
     Ship enemyShip;
-    bool wait = true;
     // try: load playerShip.ser {playerShip = playerShip.ser}
     // catch: file read error? {cout << "No previous ship found"}
 
-    // Create bot cluster
-    dpp::cluster bot(BOT_TOKEN);
+	// Create bot cluster
+	dpp::cluster bot(BOT_TOKEN);
 
-    // Output simple log messages to stdout
-    bot.on_log(dpp::utility::cout_logger());
+	// Output simple log messages to stdout
+	bot.on_log(dpp::utility::cout_logger());
 
     // Slash command is issued
     bot.on_slashcommand([&](const dpp::slashcommand_t& event) {
@@ -51,9 +50,8 @@ int main() {
                 if (playerShip.hit() > enemyShip.getAc()) {
                     int damageRoll = playerShip.damageRoll();
                     enemyShip.takeDamage(damageRoll);
-                    event.reply("Hit enemy for " + damageRoll);
-                }
-                else {
+                    event.reply("Hit enemy for " + damageRoll + " damage!");
+                } else {
                     event.reply("Attack missed!");
                 }
             }
@@ -69,37 +67,35 @@ int main() {
             }
             else if (playerShip.getHp() == playerShip.getMaxHp()) {
                 event.reply("Already at max HP!");
-            }
-            else {
+            } else {
                 event.reply("We're out of wood!");
             }
         }
         else if (event.command.get_command_name() == "loot")
         {
-            playerShip.setActivity("looting");
-            event.reply("bitch");
+            event.reply("Looting nearest island!");
         }
-        else if (event.command.get_command_name() == "hide")
+        else if (event.command.get_command_name() == "run")
         {
-            playerShip.setActivity("hiding");
-            event.reply("Dropping anchor in a nearby cove!");
-        }
-        // TESTING COMMAND THREADS
-        else if (event.command.get_command_name() == "startWait") {
-            while (wait) {
-
+            int success = rand() % 100 + 1;
+            if (playerShip.inCombat()) {
+                if (success > 50) {
+                    event.reply("Ran away successfully!");
+                } else {
+                    event.reply("Couldn't get away!");
+                    enemyAttack(enemyShip, playerShip, event);
+                }
+                
+            } else {
+                event.reply("Already out of combat!");
             }
-            event.reply("startWait finished");
+            
         }
-        else if (event.command.get_command_name() == "stopWait") {
-            wait = false;
-            event.reply("bombaclat");
-        }
-        });
+    });
 
 
 
-    // Registering the commands
+	// Registering the commands
     bot.on_ready([&bot](const dpp::ready_t& event) {
         if (dpp::run_once<struct register_bot_commands>()) {
 
@@ -110,19 +106,15 @@ int main() {
             dpp::slashcommand lootcommand("loot", "Finds an island to loot", bot.me.id);
             dpp::slashcommand defendcommand("hide", "Finds a sneaky place to drop anchor", bot.me.id);
 
-            // TESTING THREADS
-            dpp::slashcommand startwait("startWait", "start the wait timer", bot.me.id);
-            dpp::slashcommand stopwait("stopWait", "stop the wait time", bot.me.id);
-
             // Register commands
-            bot.global_bulk_command_create({ startwait, stopwait, battlecommand, firecommand, healcommand, lootcommand, defendcommand });
+            bot.global_bulk_command_create({ battlecommand, firecommand, healcommand, lootcommand, defendcommand });
         }
-        });
+    });
 
-    // Start the bot
-    bot.start(dpp::st_wait);
+	// Start the bot
+	bot.start(dpp::st_wait);
 
-    return 0;
+	return 0;
 }
 
 

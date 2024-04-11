@@ -24,7 +24,7 @@ private:
     int hp;
     int maxHp;
     int ac;
-    std::string activity;
+    bool combat;
 
 public:
     // Constructors
@@ -41,8 +41,7 @@ public:
     int getMaxHp();
     int getAc();
     int getWood();
-    void setActivity(std::string newActivity);
-    std::string getActivity();
+    bool inCombat();
     void heal();
     int hit();
     int damageRoll();
