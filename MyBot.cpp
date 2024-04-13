@@ -13,20 +13,20 @@ void enemyAttack(Ship enemyShip, Ship playerShip, const dpp::slashcommand_t& eve
 
 int main() {
 
-	// Seed random
-	srand(time(0));
+    // Seed random
+    srand(time(0));
 
-	// Create player ship
-	Ship playerShip;
+    // Create player ship
+    Ship playerShip;
     Ship enemyShip;
     // try: load playerShip.ser {playerShip = playerShip.ser}
     // catch: file read error? {cout << "No previous ship found"}
 
-	// Create bot cluster
-	dpp::cluster bot(BOT_TOKEN);
+    // Create bot cluster
+    dpp::cluster bot(BOT_TOKEN);
 
-	// Output simple log messages to stdout
-	bot.on_log(dpp::utility::cout_logger());
+    // Output simple log messages to stdout
+    bot.on_log(dpp::utility::cout_logger());
 
     // Slash command is issued
     bot.on_slashcommand([&](const dpp::slashcommand_t& event) {
@@ -34,24 +34,25 @@ int main() {
         if (event.command.get_command_name() == "battle")
         {
             // If the player isn't in combat, start combat
-            if (playerShip.getActivity() == "combat") {
+            if (playerShip.inCombat()) {
                 event.reply("Already in combat!");
             }
             else {
-                event.reply("Finding ship!");
-                playerShip.setActivity("combat");
+                event.reply("Attacking nearby ship!");
+                playerShip.setCombat(true);
             }
 
         }
         else if (event.command.get_command_name() == "fire")
         {
             // If the player is in combat, make a roll to hit
-            if (playerShip.getActivity() == "combat") {
-                if (playerShip.hit() > enemyShip.getAc()) {
+            if (playerShip.inCombat()) {
+                if (playerShip.hit() >= enemyShip.getAc()) {
                     int damageRoll = playerShip.damageRoll();
                     enemyShip.takeDamage(damageRoll);
-                    event.reply("Hit enemy for " + damageRoll + " damage!");
-                } else {
+                    event.reply("Hit enemy for " + damageRoll);
+                }
+                else {
                     event.reply("Attack missed!");
                 }
             }
@@ -67,13 +68,20 @@ int main() {
             }
             else if (playerShip.getHp() == playerShip.getMaxHp()) {
                 event.reply("Already at max HP!");
-            } else {
+            }
+            else {
                 event.reply("We're out of wood!");
             }
         }
         else if (event.command.get_command_name() == "loot")
         {
-            event.reply("Looting nearest island!");
+            int getAttacked = rand() % 100 + 1;
+
+            if (getAttacked >= 50) {
+                playerShip.setCombat(true);
+                enemyShip = Ship();
+                event.reply("Entered combat against " + enemyShip.info());
+            }
         }
         else if (event.command.get_command_name() == "run")
         {
@@ -81,21 +89,21 @@ int main() {
             if (playerShip.inCombat()) {
                 if (success > 50) {
                     event.reply("Ran away successfully!");
-                } else {
+                }
+                else {
                     event.reply("Couldn't get away!");
                     enemyAttack(enemyShip, playerShip, event);
                 }
-                
-            } else {
-                event.reply("Already out of combat!");
             }
-            
+            else {
+                event.reply("Not currently in combat!");
+            }
         }
-    });
+        });
 
 
 
-	// Registering the commands
+    // Registering the commands
     bot.on_ready([&bot](const dpp::ready_t& event) {
         if (dpp::run_once<struct register_bot_commands>()) {
 
@@ -109,12 +117,10 @@ int main() {
             // Register commands
             bot.global_bulk_command_create({ battlecommand, firecommand, healcommand, lootcommand, defendcommand });
         }
-    });
+        });
 
-	// Start the bot
-	bot.start(dpp::st_wait);
+    // Start the bot
+    bot.start(dpp::st_wait);
 
-	return 0;
+    return 0;
 }
-
-
