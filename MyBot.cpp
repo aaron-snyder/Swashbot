@@ -18,7 +18,7 @@ int main() {
 
     // Create player ship
     Ship playerShip;
-    Ship enemyShip;
+
     // try: load playerShip.ser {playerShip = playerShip.ser}
     // catch: file read error? {cout << "No previous ship found"}
 
@@ -38,10 +38,10 @@ int main() {
                 event.reply("Already in combat!");
             }
             else {
-                event.reply("Attacking nearby ship!");
                 playerShip.setCombat(true);
+                ship enemyShip = Ship();
+                event.reply("Entered combat with " + enemyShip.info());
             }
-
         }
         else if (event.command.get_command_name() == "fire")
         {
