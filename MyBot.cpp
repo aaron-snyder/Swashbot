@@ -5,7 +5,7 @@
 #include "Ship.h"
 #include <dpp/dpp.h>
 
-const std::string BOT_TOKEN = "server token goes here!";
+const std::string BOT_TOKEN = "MTE2NjE4MDc1NDk1NTQ0ODM5MA.GlW66F.WDGmOO7Qs6Sfdn_yoQqPk-5lkypDGsJO3Xun6E";
 
 void enemyAttack(Ship enemyShip, Ship playerShip, const dpp::slashcommand_t& event) {
 
@@ -18,6 +18,7 @@ int main() {
 
     // Create player ship
     Ship playerShip;
+    Ship enemyShip;
 
     // try: load playerShip.ser {playerShip = playerShip.ser}
     // catch: file read error? {cout << "No previous ship found"}
@@ -39,7 +40,7 @@ int main() {
             }
             else {
                 playerShip.setCombat(true);
-                ship enemyShip = Ship();
+                enemyShip = Ship();
                 event.reply("Entered combat with a " + enemyShip.info());
             }
         }
@@ -50,7 +51,7 @@ int main() {
                 if (playerShip.hit() >= enemyShip.getAc()) {
                     int damageRoll = playerShip.damageRoll();
                     enemyShip.takeDamage(damageRoll);
-                    event.reply("Hit enemy for " + damageRoll);
+                    event.reply("Hit enemy for " + std::to_string(damageRoll));
                 }
                 else {
                     event.reply("Attack missed!");

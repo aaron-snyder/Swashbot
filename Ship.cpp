@@ -74,12 +74,12 @@ void Ship::setHull(Hull hul) {
 
 std::string Ship::getHullString() {
     switch (hull) {
-        case Hull::Wood:
-            return "Wood";
-        case Hull::Steel:
-            return "Steel";
-        case Hull::Crystal:
-            return "Crystal";
+    case Hull::Wood:
+        return "Wood";
+    case Hull::Steel:
+        return "Steel";
+    case Hull::Crystal:
+        return "Crystal";
     }
     return "ERROR IN HULL SWITCH";
 }
