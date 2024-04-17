@@ -40,7 +40,7 @@ int main() {
             else {
                 playerShip.setCombat(true);
                 ship enemyShip = Ship();
-                event.reply("Entered combat with " + enemyShip.info());
+                event.reply("Entered combat with a " + enemyShip.info());
             }
         }
         else if (event.command.get_command_name() == "fire")
@@ -80,7 +80,11 @@ int main() {
             if (getAttacked >= 50) {
                 playerShip.setCombat(true);
                 enemyShip = Ship();
-                event.reply("Entered combat against " + enemyShip.info());
+                event.reply("Entered combat against a " + enemyShip.info());
+            } else {
+                std::string lootedItem = "random looted item";
+                // add a library of random lootable items, give each a string version plus an int value
+                event.reply("Ye found a " + lootedItem);
             }
         }
         else if (event.command.get_command_name() == "run")

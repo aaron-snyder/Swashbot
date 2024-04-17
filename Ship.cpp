@@ -72,6 +72,18 @@ void Ship::setHull(Hull hul) {
     updateArmor();
 }
 
+std::string Ship::getHullString() {
+    switch (hull) {
+        case Hull::Wood:
+            return "Wood";
+        case Hull::Steel:
+            return "Steel";
+        case Hull::Crystal:
+            return "Crystal";
+    }
+    return "ERROR IN HULL SWITCH";
+}
+
 bool Ship::inCombat() {
     return combat;
 }
@@ -156,6 +168,6 @@ int Ship::getWood() {
 
 // Returns string with info about ship
 std::string Ship::info() {
-    std::string returnString = "";
-
+    std::string returnString = getHullString() + " hull ship with " + getCannonString() + " cannons";
+    return returnString;
 }
