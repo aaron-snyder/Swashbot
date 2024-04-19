@@ -5,7 +5,7 @@
 #include "Ship.h"
 #include <dpp/dpp.h>
 
-const std::string BOT_TOKEN = "bot token goes here";
+const std::string BOT_TOKEN = "MTE2NjE4MDc1NDk1NTQ0ODM5MA.GUtE2m.Sjahna55D07wUcL6erRfkY09fLMD_gkFexqlUo";
 
 void enemyAttack(Ship enemyShip, Ship playerShip, const dpp::slashcommand_t& event) {
 
@@ -88,12 +88,12 @@ int main() {
                 event.reply("Ye found a " + lootedItem);
             }
         }
-        else if (event.command.get_command_name() == "run")
+        else if (event.command.get_command_name() == "flee")
         {
             int success = rand() % 100 + 1;
             if (playerShip.inCombat()) {
                 if (success > 50) {
-                    event.reply("Ran away successfully!");
+                    event.reply("Got away successfully!");
                 }
                 else {
                     event.reply("Couldn't get away!");
@@ -117,7 +117,7 @@ int main() {
             dpp::slashcommand firecommand("fire", "Fires cannons", bot.me.id);
             dpp::slashcommand healcommand("heal", "Uses wood to heal ship", bot.me.id);
             dpp::slashcommand lootcommand("loot", "Finds an island to loot", bot.me.id);
-            dpp::slashcommand defendcommand("hide", "Finds a sneaky place to drop anchor", bot.me.id);
+            dpp::slashcommand defendcommand("flee", "Attempts to escape from combat", bot.me.id);
 
             // Register commands
             bot.global_bulk_command_create({ battlecommand, firecommand, healcommand, lootcommand, defendcommand });
