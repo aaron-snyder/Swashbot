@@ -5,7 +5,7 @@
 #include "Ship.h"
 #include <dpp/dpp.h>
 
-const std::string BOT_TOKEN = "MTE2NjE4MDc1NDk1NTQ0ODM5MA.GUtE2m.Sjahna55D07wUcL6erRfkY09fLMD_gkFexqlUo";
+const std::string BOT_TOKEN = "bot token goes here";
 
 void enemyAttack(Ship enemyShip, Ship playerShip, const dpp::slashcommand_t& event) {
 
