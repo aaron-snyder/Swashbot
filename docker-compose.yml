@@ -1,0 +1,13 @@
+# Run with:  docker compose up -d --build
+# Logs:      docker compose logs -f
+# Backup:    docker compose cp swashbot:/data/swashbot.json ./swashbot-backup.json
+services:
+  swashbot:
+    build: .
+    restart: unless-stopped        # comes back by itself after crashes and server reboots
+    env_file: .env                 # provides DISCORD_TOKEN
+    volumes:
+      - swashbot-data:/data        # ship saves survive rebuilds and restarts
+
+volumes:
+  swashbot-data:

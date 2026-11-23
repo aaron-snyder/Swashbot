@@ -1,0 +1,16 @@
+# Secrets - never commit your bot token
+.env
+
+# Bot save data
+swashbot.json
+swashbot.json.tmp
+swashbot.json.corrupt-*
+data/
+
+# Build output
+build/
+out/
+.vs/
+x64/
+*.exe
+*.obj
