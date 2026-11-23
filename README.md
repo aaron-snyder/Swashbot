@@ -86,6 +86,16 @@ Open the invite link, add the bot to your server, and run `/setup` as an admin. 
 
 > If `/join` says it can't give the role, drag Swashbot's own role **above** "Swashbot Crew" in Server Settings → Roles.
 
+### Or deploy on Railway
+
+1. **New Project → Deploy from GitHub repo** → pick this repo. Railway finds the `Dockerfile` by itself.
+2. In the service's **Variables** tab, add `DISCORD_TOKEN`.
+3. Right-click the service on the project canvas → **Attach volume**, with mount path `/data`. Without a volume, every redeploy wipes all ships.
+4. Don't generate a public domain. The bot doesn't serve web traffic.
+5. Watch **Deployments → View logs** for `Swashbot is afloat!` and the invite link.
+
+Every push to `main` redeploys automatically, and the volume keeps the save file.
+
 ### 3. Host it for free
 
 Any always-on Linux machine with Docker works. Free options, at the time of writing:
