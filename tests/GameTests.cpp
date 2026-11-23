@@ -125,6 +125,30 @@ void testGating() {
     CHECK(!game->command("leaderboard", ctx(CAROL, T0)).ephemeral);
 }
 
+void testSetupAndRepair() {
+    auto game = std::make_unique<Game>("", 3);
+    game->configure(GUILD, "Test Server", CHANNEL, ROLE, T0);
+    GuildState g = game->snapshot(GUILD);
+    CHECK(g.configured() && !g.sailing);
+    CHECK(game->tick(T0 + 24 * 3600).empty());  // nobody aboard, nobody gets pinged
+
+    game->join(ctx(ALICE, T0 + 100));  // first sailor: she sets sail
+    g = game->snapshot(GUILD);
+    CHECK(g.sailing && g.nextEventAt >= T0 + 100 + Tuning::FIRST_EVENT_MIN);
+    game->join(ctx(BOB, T0 + 100));
+    std::vector<uint64_t> ids = game->crewIds(GUILD);
+    CHECK(ids.size() == 2);
+
+    // Re-running setup with a rebuilt channel and role keeps the ship, crew and voyage
+    game->edit(GUILD, [](GuildState& s) { s.stats.victories = 4; });
+    int64_t nextEvent = game->snapshot(GUILD).nextEventAt;
+    game->configure(GUILD, "", 7777, 8888, T0 + 200);
+    g = game->snapshot(GUILD);
+    CHECK(g.channelId == 7777 && g.roleId == 8888 && g.guildName == "Test Server");
+    CHECK(g.stats.victories == 4 && g.crewCount() == 2 && g.sailing && g.nextEventAt == nextEvent);
+    CHECK(game->command("status", ctx(ALICE, T0, 7777)).ephemeral == false);  // the new channel is the deck now
+}
+
 void testJoinLeave() {
     auto game = makeGame();
     game->edit(GUILD, [](GuildState& g) { g.crew[ALICE].points = 42; });
@@ -524,6 +548,7 @@ int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests = {
         { "ship", testShip },
         { "gating", testGating },
+        { "setup and repair", testSetupAndRepair },
         { "join/leave", testJoinLeave },
         { "random events from tick", testRandomEventsFromTick },
         { "combat victory", testCombatVictory },

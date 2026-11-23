@@ -9,6 +9,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <iostream>
 #include <string>
 #include <dpp/dpp.h>
@@ -84,64 +88,148 @@ std::string errorText(const dpp::confirmation_callback_t& cb) {
 }
 
 // ---------------------------------------------------------------------------
-// /setup: create the crew role and a private channel only that role can see
+// Ship channel + crew role setup
+//
+// Runs by itself whenever the bot sees a server that isn't set up yet: when it's added to a new
+// server, and at startup for servers it was already in (e.g. ones an older version joined).
+// /setup runs the same steps again as a repair: anything missing is recreated, anything that
+// still exists is reused, and the channel's permissions are put back the way they should be.
 // ---------------------------------------------------------------------------
-void handleSetup(dpp::cluster& bot, Game& game, const dpp::slashcommand_t& event) {
-    const dpp::snowflake guildId = event.command.guild_id;
-    Game::SetupInfo existing = game.setupInfo(guildId);
-    if (existing.channelId != 0 && dpp::find_channel(existing.channelId) != nullptr) {
-        event.reply(dpp::message("Swashbot already lives in <#" + std::to_string(existing.channelId) +
-                                 ">. Delete that channel and run `/setup` again if you want to rebuild it.").set_flags(dpp::m_ephemeral));
-        return;
-    }
+const std::string PERMISSION_HELP =
+    "Make sure I have **Manage Channels** and **Manage Roles** (Server Settings \xE2\x86\x92 Roles \xE2\x86\x92 Swashbot), then run `/setup`.";
+constexpr uint64_t CREW_PERMS = dpp::p_view_channel | dpp::p_send_messages | dpp::p_read_message_history;
 
-    event.thinking(true);
+struct SetupResult {
+    bool ok = false;
+    std::string summary;
+};
+using SetupDone = std::function<void(const SetupResult&)>;
+
+// Only one setup per server at a time (startup and /setup could otherwise race and build two channels)
+std::mutex setupMutex;
+std::set<uint64_t> setupInProgress;
+
+struct SetupGuard {
+    explicit SetupGuard(uint64_t id) : guildId(id) {}
+    ~SetupGuard() {
+        std::lock_guard<std::mutex> lock(setupMutex);
+        setupInProgress.erase(guildId);
+    }
+    uint64_t guildId;
+};
+
+std::string joinWithCommas(const std::vector<std::string>& parts) {
+    std::string out;
+    for (size_t i = 0; i < parts.size(); i++) out += (i == 0 ? "" : ", ") + parts[i];
+    return out;
+}
+
+// A crew role left behind by an earlier setup (e.g. if the save file was lost)
+dpp::snowflake findRoleByName(dpp::snowflake guildId, const std::string& name) {
+    dpp::guild* g = dpp::find_guild(guildId);
+    if (g == nullptr) return 0;
+    for (dpp::snowflake id : g->roles) {
+        dpp::role* r = dpp::find_role(id);
+        if (r != nullptr && r->name == name) return id;
+    }
+    return 0;
+}
+
+void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone done) {
+    {
+        std::lock_guard<std::mutex> lock(setupMutex);
+        if (!setupInProgress.insert(guildId).second) {
+            done({ false, "Setup is already running in this server - give it a moment." });
+            return;
+        }
+    }
+    // Shared by every callback below; frees the "in progress" slot when the last one finishes
+    auto guard = std::make_shared<SetupGuard>(guildId);
+    auto fixed = std::make_shared<std::vector<std::string>>();
+
     dpp::guild* g = dpp::find_guild(guildId);
     const std::string guildName = g ? g->name : "";
-    const Ctx admin = contextOf(event);
+    const Game::SetupInfo existing = game.setupInfo(guildId);
 
-    auto createChannel = [&bot, &game, event, guildId, guildName, admin](dpp::snowflake roleId) {
-        const uint64_t crewPerms = dpp::p_view_channel | dpp::p_send_messages | dpp::p_read_message_history;
+    // Step 3: save the ids, welcome the crew, and report back
+    auto finish = [&bot, &game, guildId, guildName, fixed, guard, done](dpp::snowflake channelId, dpp::snowflake roleId,
+                                                                        bool channelIsNew, bool roleIsNew) {
+        Reply welcome = game.configure(guildId, guildName, channelId, roleId, unixNow());
+        if (channelIsNew) bot.message_create(toMessage(welcome).set_channel_id(channelId));
+
+        // A replacement role starts empty: hand it back to everyone already on the crew
+        if (roleIsNew) {
+            std::vector<uint64_t> crew = game.crewIds(guildId);
+            for (uint64_t userId : crew) bot.guild_member_add_role(guildId, userId, roleId);
+            if (!crew.empty()) fixed->push_back("gave the crew role back to " + std::to_string(crew.size()) + " sailor(s)");
+        }
+        std::string summary = fixed->empty() ? "Everything was already shipshape." : "Fixed: " + joinWithCommas(*fixed) + ".";
+        done({ true, summary + " The ship lives in <#" + std::to_string(channelId) + ">. Members use `/join` to see it." });
+    };
+
+    // Step 2: the private ship channel (hidden from @everyone, visible to the crew role and the bot)
+    auto ensureChannel = [&bot, guildId, existing, fixed, guard, done, finish](dpp::snowflake roleId, bool roleIsNew) {
+        dpp::channel* current = existing.channelId != 0 ? dpp::find_channel(existing.channelId) : nullptr;
+        if (current != nullptr) {
+            // Channel's still there: put its permissions back (the role may be new, or someone may have changed them)
+            dpp::channel ch = *current;
+            ch.set_permission_overwrite(guildId, dpp::ot_role, 0, dpp::p_view_channel)
+              .set_permission_overwrite(roleId, dpp::ot_role, CREW_PERMS, 0)
+              .set_permission_overwrite(bot.me.id, dpp::ot_member, CREW_PERMS | dpp::p_embed_links, 0);
+            bot.channel_edit(ch, [ch, roleId, roleIsNew, guard, done, finish](const dpp::confirmation_callback_t& cb) {
+                if (cb.is_error()) {
+                    done({ false, "I couldn't update <#" + std::to_string(ch.id) + ">'s permissions: " + errorText(cb) + "\n" + PERMISSION_HELP });
+                    return;
+                }
+                finish(ch.id, roleId, false, roleIsNew);
+            });
+            return;
+        }
+
         dpp::channel ch;
         ch.set_name(SHIP_CHANNEL_NAME)
           .set_guild_id(guildId)
           .set_topic("The deck of our pirate ship. /join to sign on, /help for commands.")
-          .add_permission_overwrite(guildId, dpp::ot_role, 0, dpp::p_view_channel)        // hidden from @everyone
-          .add_permission_overwrite(roleId, dpp::ot_role, crewPerms, 0)                   // visible to the crew
-          .add_permission_overwrite(bot.me.id, dpp::ot_member, crewPerms | dpp::p_embed_links, 0);
-
-        bot.channel_create(ch, [&bot, &game, event, guildId, guildName, admin, roleId](const dpp::confirmation_callback_t& cb) {
+          .add_permission_overwrite(guildId, dpp::ot_role, 0, dpp::p_view_channel)
+          .add_permission_overwrite(roleId, dpp::ot_role, CREW_PERMS, 0)
+          .add_permission_overwrite(bot.me.id, dpp::ot_member, CREW_PERMS | dpp::p_embed_links, 0);
+        bot.channel_create(ch, [roleId, roleIsNew, fixed, guard, done, finish](const dpp::confirmation_callback_t& cb) {
             if (cb.is_error()) {
-                event.edit_original_response(dpp::message("I couldn't create the ship channel: " + errorText(cb) +
-                                                           "\nMake sure I have the **Manage Channels** and **Manage Roles** permissions."));
+                done({ false, "I couldn't create the ship channel: " + errorText(cb) + "\n" + PERMISSION_HELP });
                 return;
             }
-            dpp::channel created = cb.get<dpp::channel>();
-            Reply welcome = game.configure(guildId, guildName, created.id, roleId, unixNow());
-            bot.message_create(toMessage(welcome).set_channel_id(created.id));
-
-            // Sign the admin up straight away
-            bot.guild_member_add_role(guildId, admin.userId, roleId, [&game, admin](const dpp::confirmation_callback_t& rc) {
-                if (!rc.is_error() && !game.checkJoin(admin)) game.join(admin);
-            });
-            event.edit_original_response(dpp::message("All set! The ship lives in <#" + std::to_string(created.id) +
-                                                      ">. Members use `/join` to get the **" + CREW_ROLE_NAME + "** role and see it."));
+            fixed->push_back("created the ship channel");
+            finish(cb.get<dpp::channel>().id, roleId, true, roleIsNew);
         });
     };
 
+    // Step 1: the crew role
     if (existing.roleId != 0 && dpp::find_role(existing.roleId) != nullptr) {
-        createChannel(existing.roleId);
+        ensureChannel(existing.roleId, false);
+        return;
+    }
+    if (dpp::snowflake leftover = findRoleByName(guildId, CREW_ROLE_NAME)) {
+        fixed->push_back("reconnected the existing crew role");
+        ensureChannel(leftover, true);
         return;
     }
     dpp::role role;
     role.set_name(CREW_ROLE_NAME).set_guild_id(guildId).set_flags(dpp::r_mentionable).set_colour(0xC8A04A);
-    bot.role_create(role, [event, createChannel](const dpp::confirmation_callback_t& cb) {
+    bot.role_create(role, [fixed, guard, done, ensureChannel](const dpp::confirmation_callback_t& cb) {
         if (cb.is_error()) {
-            event.edit_original_response(dpp::message("I couldn't create the crew role: " + errorText(cb) +
-                                                       "\nMake sure I have the **Manage Roles** permission."));
+            done({ false, "I couldn't create the crew role: " + errorText(cb) + "\n" + PERMISSION_HELP });
             return;
         }
-        createChannel(cb.get<dpp::role>().id);
+        fixed->push_back("created the crew role");
+        ensureChannel(cb.get<dpp::role>().id, true);
+    });
+}
+
+// /setup: an admin re-runs setup to repair a deleted channel or role
+void handleSetup(dpp::cluster& bot, Game& game, const dpp::slashcommand_t& event) {
+    event.thinking(true);
+    setupGuild(bot, game, event.command.guild_id, [event](const SetupResult& r) {
+        event.edit_original_response(dpp::message(r.summary));
     });
 }
 
@@ -230,7 +318,7 @@ std::vector<dpp::slashcommand> buildCommands(dpp::snowflake appId) {
     cmds.push_back(buy);
 
     // Admin-only: Discord hides these from members without Manage Server
-    dpp::slashcommand setup = cmd("setup", "Create the Swashbot crew channel and role");
+    dpp::slashcommand setup = cmd("setup", "Re-run setup: rebuild a missing ship channel or crew role");
     setup.set_default_permissions(dpp::p_manage_guild);
     cmds.push_back(setup);
 
@@ -261,9 +349,23 @@ int main() {
     dpp::cluster bot(token);
     bot.on_log(dpp::utility::cout_logger());
 
-    // Remember server names for the leaderboard
-    bot.on_guild_create([&game](const dpp::guild_create_t& event) {
-        game.setGuildName(event.created.id, event.created.name);
+    // Fires when the bot joins a server, and for every server it's in each time it starts up
+    bot.on_guild_create([&bot, &game](const dpp::guild_create_t& event) {
+        const dpp::guild& g = event.created;
+        game.setGuildName(g.id, g.name);  // for the leaderboard
+        if (game.setupInfo(g.id).channelId != 0) return;  // already set up; repairs are what /setup is for
+
+        // Not set up yet (brand new, or joined by an older version of the bot): build the ship now
+        const dpp::snowflake systemChannel = g.system_channel_id;
+        setupGuild(bot, game, g.id, [&bot, systemChannel, guildId = g.id](const SetupResult& r) {
+            std::cout << "[swashbot] auto-setup in guild " << guildId << ": " << r.summary << std::endl;
+            // Let the server know the ship has arrived (only on success - no repeated error spam on restarts)
+            if (r.ok && systemChannel != 0) {
+                bot.message_create(dpp::message(systemChannel,
+                    "\xF0\x9F\x8F\xB4\xE2\x80\x8D\xE2\x98\xA0\xEF\xB8\x8F **Swashbot has dropped anchor here!** "
+                    "Run `/join` to sign on to the crew and help run the server's pirate ship."));
+            }
+        });
     });
 
     bot.on_slashcommand([&bot, &game](const dpp::slashcommand_t& event) {

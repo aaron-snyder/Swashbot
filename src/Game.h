@@ -165,6 +165,7 @@ public:
     SetupInfo setupInfo(uint64_t guildId);
     Reply configure(uint64_t guildId, const std::string& guildName, uint64_t channelId, uint64_t roleId, int64_t now);
     void setGuildName(uint64_t guildId, const std::string& name);
+    std::vector<uint64_t> crewIds(uint64_t guildId);   // everyone currently aboard (to re-grant a recreated role)
 
     // --- Joining the crew. check*() runs before the bot touches roles, join()/leave() after ---
     std::optional<Reply> checkJoin(const Ctx& ctx);

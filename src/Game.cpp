@@ -70,6 +70,10 @@ const std::array<const char*, 12> ENEMY_NAMES = {
     "the Iron Petrel", "the Moray's Grin", "the Tattered Saint", "the Cutthroat Clam",
 };
 
+const char* NOT_SET_UP =
+    "Swashbot couldn't build its ship channel in this server yet. It needs the **Manage Channels** and "
+    "**Manage Roles** permissions - once it has them, an admin can run `/setup`.";
+
 const std::array<const char*, 6> MERCHANT_NAMES = {
     "the Fat Abbot", "the Spice Countess", "the Velvet Ledger",
     "the Golden Ewe", "the Lazy Tortoise", "the Silk Hen",
@@ -145,18 +149,15 @@ Game::SetupInfo Game::setupInfo(uint64_t guildId) {
 Reply Game::configure(uint64_t guildId, const std::string& guildName, uint64_t channelId, uint64_t roleId, int64_t now) {
     std::lock_guard<std::mutex> lock(mutex);
     GuildState& g = guild(guildId);
-    bool firstTime = !g.configured() && g.crew.empty();
-    g.guildName = guildName;
+    if (!guildName.empty()) g.guildName = guildName;
     g.channelId = channelId;
     g.roleId = roleId;
-    if (firstTime) {
-        g.sailing = true;
-        g.nextEventAt = now + rng.range(Tuning::FIRST_EVENT_MIN, Tuning::FIRST_EVENT_MAX);
-    }
+    (void)now;  // a new ship waits at anchor; join() sets sail when the first crew member signs on
     saveLocked();
 
     Reply r = reply("\xE2\x9A\x93 " + g.ship.getName() + " is ready to sail!",
-        "This channel is the deck of your server's ship. Everyone who `/join`s the crew can see it and help run her.\n\n"
+        "This channel is the deck of your server's ship. Everyone who `/join`s the crew can see it and help run her. "
+        "She weighs anchor as soon as the first sailor signs on.\n\n"
         "**How it works**\n"
         "\xE2\x80\xA2 Every so often something happens at sea - an enemy attack, a storm, a fire, a fat merchant ship. "
         "The crew gets pinged and has a few minutes to respond.\n"
@@ -176,11 +177,22 @@ void Game::setGuildName(uint64_t guildId, const std::string& name) {
     }
 }
 
+std::vector<uint64_t> Game::crewIds(uint64_t guildId) {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<uint64_t> ids;
+    auto it = guilds.find(guildId);
+    if (it == guilds.end()) return ids;
+    for (const auto& [id, m] : it->second.crew) {
+        if (m.aboard) ids.push_back(id);
+    }
+    return ids;
+}
+
 std::optional<Reply> Game::checkJoin(const Ctx& c) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = guilds.find(c.guildId);
     if (it == guilds.end() || !it->second.configured()) {
-        return privateNote("Swashbot isn't set up in this server yet. Ask an admin to run `/setup`.");
+        return privateNote(NOT_SET_UP);
     }
     auto m = it->second.crew.find(c.userId);
     if (m != it->second.crew.end() && m->second.aboard) {
@@ -197,6 +209,12 @@ Reply Game::join(const Ctx& c) {
     m.name = c.userName;
     m.aboard = true;
     if (!returning) m.joinedAt = c.now;
+
+    // A brand-new ship sets sail when its first sailor arrives
+    if (!g.sailing && !g.event.active() && g.nextEventAt == 0 && g.crewCount() == 1) {
+        g.sailing = true;
+        g.nextEventAt = c.now + rng.range(Tuning::FIRST_EVENT_MIN, Tuning::FIRST_EVENT_MAX);
+    }
     saveLocked();
     Reply r = privateNote(std::string(returning ? "Welcome back aboard, " : "Welcome aboard, ") + c.userName +
                           "! The ship is in " + channelLink(g.channelId) + ". Try `/status` there.");
@@ -208,7 +226,7 @@ std::optional<Reply> Game::checkLeave(const Ctx& c) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = guilds.find(c.guildId);
     if (it == guilds.end() || !it->second.configured()) {
-        return privateNote("Swashbot isn't set up in this server yet.");
+        return privateNote(NOT_SET_UP);
     }
     auto m = it->second.crew.find(c.userId);
     if (m == it->second.crew.end() || !m->second.aboard) {
@@ -245,7 +263,7 @@ Reply Game::command(const std::string& name, const Ctx& c, const std::string& ar
 
     auto it = guilds.find(c.guildId);
     if (it == guilds.end() || !it->second.configured()) {
-        return privateNote("Swashbot isn't set up in this server yet. Ask an admin to run `/setup`.");
+        return privateNote(NOT_SET_UP);
     }
     GuildState& g = it->second;
 
@@ -322,7 +340,7 @@ Reply Game::help() {
         "**Port**\n"
         "`/shop` - prices  \xE2\x80\xA2  `/buy` - buy wood or upgrades\n\n"
         "**Admins**\n"
-        "`/setup` - create the ship channel and crew role  \xE2\x80\xA2  `/rename` - name the ship");
+        "`/setup` - repair the ship channel and crew role  \xE2\x80\xA2  `/rename` - name the ship");
     r.ephemeral = true;
     return r;
 }

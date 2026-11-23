@@ -25,7 +25,7 @@ If they're still afloat in 8 minutes they'll board us and plunder the hold.
 
 | Who | Command | What it does |
 |---|---|---|
-| Admin | `/setup` | Creates the `#the-ship` channel and the **Swashbot Crew** role (only crew can see the channel) |
+| Admin | `/setup` | Repairs the ship channel and crew role. The bot builds them by itself when it joins a server |
 | Admin | `/rename <name>` | Names the ship |
 | Anyone | `/join`, `/leave` | Sign on/off the crew (adds/removes the role) |
 | Anyone | `/status`, `/crew`, `/shop`, `/help` | Ship info, crew rankings, prices, help. Outside the ship channel only you see the reply |
@@ -82,9 +82,24 @@ docker compose up -d --build
 docker compose logs -f      # prints the invite link once it connects
 ```
 
-Open the invite link, add the bot to your server, and run `/setup` as an admin. The invite asks for View Channels, Send Messages, Embed Links, Read Message History, Manage Channels and Manage Roles.
+Open the invite link and add the bot to your server. That's all: as soon as it arrives, Swashbot creates a private `#the-ship` channel and a **Swashbot Crew** role, and posts a welcome in the server's system channel. The ship sets sail when the first member runs `/join`.
 
-> If `/join` says it can't give the role, drag Swashbot's own role **above** "Swashbot Crew" in Server Settings → Roles.
+The invite needs these permissions:
+- View Channels, Send Messages, Embed Links, Read Message History
+- **Manage Channels**, to build the ship channel
+- **Manage Roles**, to create the crew role and hand it out
+
+If you use Discord's own install link (Developer Portal → **Installation**), tick the `bot` and `applications.commands` scopes and those six permissions.
+
+**`/setup`** (admins only) runs the setup again as a repair:
+- recreates the channel or role if someone deleted them
+- reconnects an existing "Swashbot Crew" role
+- puts back the channel's privacy settings
+- gives a recreated role back to the existing crew
+
+If the bot was added without Manage Channels or Manage Roles, grant them, then run `/setup`.
+
+> If `/join` says it can't give the role, someone has moved "Swashbot Crew" above the bot's own role. Drag the **Swashbot** role back above it in Server Settings → Roles.
 
 ### Or deploy on Railway
 
@@ -136,7 +151,7 @@ On Windows, `vcpkg install dpp nlohmann-json` and open the folder in Visual Stud
 | `src/Ship.h/.cpp` | The ship: hull/cannon tiers, d20 attack rolls, damage, repairs, upgrades |
 | `src/Game.h/.cpp` | The game engine: commands, random events, the economy, leaderboards. No Discord code, so it's fully testable |
 | `src/Storage.cpp` | Saving and loading every ship as JSON |
-| `src/MyBot.cpp` | The Discord layer: slash commands, `/setup` channel and role creation, the 10-second heartbeat |
+| `src/MyBot.cpp` | The Discord layer: slash commands, automatic channel/role setup and `/setup` repairs, the 10-second heartbeat |
 | `tests/GameTests.cpp` | Engine tests, including week-long simulated voyages |
 
 Balance numbers (event frequency, cooldowns, prices) all live in the `Tuning` namespace at the top of `src/Game.h`.
