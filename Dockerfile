@@ -38,7 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --create-home swashbot \
     && mkdir -p /data && chown swashbot /data
 COPY --from=build /src/build/swashbot /usr/local/bin/swashbot
-USER swashbot
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+# Saves go here - mount a volume at /data (docker-compose.yml and Railway both do)
 ENV SWASHBOT_DATA=/data/swashbot.json
-VOLUME ["/data"]
-CMD ["swashbot"]
+# Starts as root only long enough to fix /data ownership, then runs the bot as "swashbot"
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
