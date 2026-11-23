@@ -1,0 +1,4 @@
+# Keep Linux line endings for files that run inside the Docker image, even on a Windows checkout
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
