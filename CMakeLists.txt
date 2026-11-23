@@ -15,6 +15,11 @@ if(NOT nlohmann_json_FOUND)
     FetchContent_MakeAvailable(json)
 endif()
 
+# Source files contain emoji, so tell MSVC they are UTF-8 (GCC/Clang assume it)
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # The game engine has no Discord dependency, so it can be tested on its own
 add_library(swashbot_game STATIC src/Ship.cpp src/Game.cpp src/Storage.cpp)
 target_include_directories(swashbot_game PUBLIC src)

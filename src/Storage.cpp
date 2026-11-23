@@ -91,6 +91,8 @@ bool Game::saveLocked() {
                 { "hazardWork", m.hazardWork }, { "plunder", m.plunder },
             };
         }
+        json ayes = json::array();
+        for (uint64_t userId : g.nameVote.ayes) ayes.push_back(std::to_string(userId));
         // Snowflake ids are stored as strings: they don't fit in a JavaScript number if anyone reads this file elsewhere
         all[std::to_string(id)] = {
             { "guildName", g.guildName }, { "channelId", std::to_string(g.channelId) }, { "roleId", std::to_string(g.roleId) },
@@ -101,6 +103,11 @@ bool Game::saveLocked() {
             } },
             { "crew", crew }, { "sailing", g.sailing }, { "nextEventAt", g.nextEventAt }, { "nextRaidAt", g.nextRaidAt },
             { "nextDockRepairAt", g.nextDockRepairAt }, { "ignoredEvents", g.ignoredEvents }, { "event", eventToJson(g.event) },
+            { "nextVoteId", g.nextVoteId },
+            { "nameVote", {
+                { "id", g.nameVote.id }, { "name", g.nameVote.name }, { "proposerName", g.nameVote.proposerName },
+                { "ayes", ayes }, { "closesAt", g.nameVote.closesAt },
+            } },
         };
     }
 
@@ -167,6 +174,15 @@ bool Game::load(int64_t now) {
             g.nextDockRepairAt = j.value("nextDockRepairAt", int64_t{ 0 });
             g.ignoredEvents = j.value("ignoredEvents", 0);
             g.event = eventFromJson(j.at("event"));
+            g.nextVoteId = j.value("nextVoteId", 1);
+            if (j.contains("nameVote")) {
+                const json& v = j["nameVote"];
+                g.nameVote.id = v.value("id", 0);
+                g.nameVote.name = v.value("name", std::string());
+                g.nameVote.proposerName = v.value("proposerName", std::string());
+                g.nameVote.closesAt = v.value("closesAt", int64_t{ 0 });
+                for (const auto& a : v.value("ayes", json::array())) g.nameVote.ayes.insert(std::stoull(a.get<std::string>()));
+            }
 
             // The bot may have been offline for a while. Don't punish the crew for that:
             // give any running event a few minutes' grace, and don't fire a backlog of events at once.

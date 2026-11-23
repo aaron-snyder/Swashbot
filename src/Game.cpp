@@ -1,5 +1,8 @@
 // File: Game.cpp
-// Swashbot game rules: commands, random events, the economy and the leaderboards.
+// Swashbot game rules: commands, random events, the economy, ship naming and the leaderboards.
+//
+// Message style: every message is a short title, one line saying what happened, and (if needed)
+// one line with a status bar or the commands to use next. Errors are a single private sentence.
 
 #include "Game.h"
 #include <algorithm>
@@ -14,12 +17,14 @@ using namespace ShipSpecs;
 // ============================================================================
 namespace {
 
+const std::string DOT = " · ";
+
 // Discord renders <t:UNIX:R> as a live countdown ("in 3 minutes") in each user's own timezone
 std::string when(int64_t unixTime) { return "<t:" + std::to_string(unixTime) + ":R>"; }
 
 std::string channelLink(uint64_t channelId) { return "<#" + std::to_string(channelId) + ">"; }
 
-std::string withCommas(long long n) {
+std::string num(long long n) {
     std::string digits = std::to_string(n < 0 ? -n : n);
     std::string out;
     for (size_t i = 0; i < digits.size(); i++) {
@@ -29,11 +34,13 @@ std::string withCommas(long long n) {
     return (n < 0 ? "-" : "") + out;
 }
 
-std::string bar(int value, int max, int width = 12) {
+// `██████░░░░` 60/100
+std::string bar(int value, int max) {
+    const int width = 10;
     if (max <= 0) max = 1;
     int filled = static_cast<int>(std::lround(static_cast<double>(std::clamp(value, 0, max)) / max * width));
     std::string out;
-    for (int i = 0; i < width; i++) out += (i < filled ? "\xE2\x96\x88" : "\xE2\x96\x91");  // █ / ░
+    for (int i = 0; i < width; i++) out += (i < filled ? "█" : "░");
     return "`" + out + "` " + std::to_string(std::max(value, 0)) + "/" + std::to_string(max);
 }
 
@@ -47,22 +54,34 @@ std::string oneDecimal(double v) {
 
 std::string bold(const std::string& s) { return "**" + s + "**"; }
 
+// "+12 gold · +3 wood", skipping zeros
+std::string loot(int gold, int wood, const char* sign = "+") {
+    std::string out;
+    if (gold > 0) out += sign + num(gold) + " gold";
+    if (wood > 0) out += (out.empty() ? "" : DOT) + sign + num(wood) + " wood";
+    return out.empty() ? "nothing" : out;
+}
+
 Reply reply(const std::string& title, const std::string& body, Tone tone = Tone::Info) {
     Reply r;
     r.title = title;
     r.body = body;
+    while (!r.body.empty() && r.body.back() == '\n') r.body.pop_back();
     r.tone = tone;
     return r;
 }
 
-// Errors and "you can't do that right now" messages are only shown to the person who asked
-Reply privateNote(const std::string& body) {
+// Errors and "not right now" messages: one sentence, only the person who asked sees it
+Reply note(const std::string& text) {
     Reply r;
-    r.body = body;
-    r.tone = Tone::Info;
+    r.body = text;
     r.ephemeral = true;
     return r;
 }
+
+const char* NOT_SET_UP = "Not set up yet. Swashbot needs **Manage Channels** and **Manage Roles**, then an admin runs `/setup`.";
+const char* NOT_CREW = "Join the crew first: `/join`";
+const char* BUSY = "Busy with an event right now.";
 
 const std::array<const char*, 12> ENEMY_NAMES = {
     "the Rusty Gull", "the Black Wake", "the Widow's Lantern", "the Salt Ghost",
@@ -70,27 +89,10 @@ const std::array<const char*, 12> ENEMY_NAMES = {
     "the Iron Petrel", "the Moray's Grin", "the Tattered Saint", "the Cutthroat Clam",
 };
 
-const char* NOT_SET_UP =
-    "Swashbot couldn't build its ship channel in this server yet. It needs the **Manage Channels** and "
-    "**Manage Roles** permissions - once it has them, an admin can run `/setup`.";
-
 const std::array<const char*, 6> MERCHANT_NAMES = {
     "the Fat Abbot", "the Spice Countess", "the Velvet Ledger",
     "the Golden Ewe", "the Lazy Tortoise", "the Silk Hen",
 };
-
-std::string eventName(EventKind k) {
-    switch (k) {
-    case EventKind::EnemyShip: return "Enemy attack";
-    case EventKind::Merchant: return "Merchant sighted";
-    case EventKind::Kraken: return "Kraken";
-    case EventKind::Storm: return "Storm";
-    case EventKind::Fire: return "Fire aboard";
-    case EventKind::Wreckage: return "Floating wreckage";
-    case EventKind::None: break;
-    }
-    return "Calm seas";
-}
 
 // Cleans user-supplied ship names so they can't ping people or break formatting
 std::string cleanName(const std::string& raw) {
@@ -113,6 +115,15 @@ std::string cleanName(const std::string& raw) {
 
 int GuildState::crewCount() const {
     return static_cast<int>(std::count_if(crew.begin(), crew.end(), [](const auto& kv) { return kv.second.aboard; }));
+}
+
+int GuildState::votesNeeded() const { return std::max(1, (crewCount() + 1) / 2); }
+
+int GuildState::ayesFromCrew() const {
+    return static_cast<int>(std::count_if(nameVote.ayes.begin(), nameVote.ayes.end(), [this](uint64_t id) {
+        auto it = crew.find(id);
+        return it != crew.end() && it->second.aboard;
+    }));
 }
 
 // Ship score: everything the crew has earned, plus bonuses for glory, minus a penalty for sinking.
@@ -155,17 +166,9 @@ Reply Game::configure(uint64_t guildId, const std::string& guildName, uint64_t c
     (void)now;  // a new ship waits at anchor; join() sets sail when the first crew member signs on
     saveLocked();
 
-    Reply r = reply("\xE2\x9A\x93 " + g.ship.getName() + " is ready to sail!",
-        "This channel is the deck of your server's ship. Everyone who `/join`s the crew can see it and help run her. "
-        "She weighs anchor as soon as the first sailor signs on.\n\n"
-        "**How it works**\n"
-        "\xE2\x80\xA2 Every so often something happens at sea - an enemy attack, a storm, a fire, a fat merchant ship. "
-        "The crew gets pinged and has a few minutes to respond.\n"
-        "\xE2\x80\xA2 Fights need many hands: each command has a short per-person cooldown, so the more crew show up, the less we lose.\n"
-        "\xE2\x80\xA2 Spend plunder in the `/shop` to upgrade the hull, cannons and guns, and climb the `/leaderboard`.\n"
-        "\xE2\x80\xA2 Nobody around? If three alarms go unanswered the ship drops anchor by itself. `/sail` sets out again.\n\n"
-        "Type `/help` for every command.", Tone::Good);
-    return r;
+    return reply("🏴‍☠️ All aboard",
+                 "This is the ship's deck. When an alert pops up, answer it with commands before time runs out.\n"
+                 "`/help` for commands.", Tone::Good);
 }
 
 void Game::setGuildName(uint64_t guildId, const std::string& name) {
@@ -191,12 +194,10 @@ std::vector<uint64_t> Game::crewIds(uint64_t guildId) {
 std::optional<Reply> Game::checkJoin(const Ctx& c) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = guilds.find(c.guildId);
-    if (it == guilds.end() || !it->second.configured()) {
-        return privateNote(NOT_SET_UP);
-    }
+    if (it == guilds.end() || !it->second.configured()) return note(NOT_SET_UP);
     auto m = it->second.crew.find(c.userId);
     if (m != it->second.crew.end() && m->second.aboard) {
-        return privateNote("You're already part of the crew! Head to " + channelLink(it->second.channelId) + ".");
+        return note("You're already crew. Head to " + channelLink(it->second.channelId) + ".");
     }
     return std::nullopt;
 }
@@ -216,8 +217,7 @@ Reply Game::join(const Ctx& c) {
         g.nextEventAt = c.now + rng.range(Tuning::FIRST_EVENT_MIN, Tuning::FIRST_EVENT_MAX);
     }
     saveLocked();
-    Reply r = privateNote(std::string(returning ? "Welcome back aboard, " : "Welcome aboard, ") + c.userName +
-                          "! The ship is in " + channelLink(g.channelId) + ". Try `/status` there.");
+    Reply r = note(std::string(returning ? "Welcome back! " : "Welcome aboard! ") + "Head to " + channelLink(g.channelId) + ".");
     r.tone = Tone::Good;
     return r;
 }
@@ -225,13 +225,9 @@ Reply Game::join(const Ctx& c) {
 std::optional<Reply> Game::checkLeave(const Ctx& c) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = guilds.find(c.guildId);
-    if (it == guilds.end() || !it->second.configured()) {
-        return privateNote(NOT_SET_UP);
-    }
+    if (it == guilds.end() || !it->second.configured()) return note(NOT_SET_UP);
     auto m = it->second.crew.find(c.userId);
-    if (m == it->second.crew.end() || !m->second.aboard) {
-        return privateNote("You're not on the crew.");
-    }
+    if (m == it->second.crew.end() || !m->second.aboard) return note("You're not in the crew.");
     return std::nullopt;
 }
 
@@ -240,7 +236,7 @@ Reply Game::leave(const Ctx& c) {
     GuildState& g = guild(c.guildId);
     g.crew[c.userId].aboard = false;
     saveLocked();
-    return privateNote("You've left the crew. Your record is kept for if you ever `/join` again.");
+    return note("You left the crew. Your stats are saved if you come back.");
 }
 
 CrewMember& Game::member(GuildState& g, const Ctx& c) {
@@ -262,30 +258,20 @@ Reply Game::command(const std::string& name, const Ctx& c, const std::string& ar
     }
 
     auto it = guilds.find(c.guildId);
-    if (it == guilds.end() || !it->second.configured()) {
-        return privateNote(NOT_SET_UP);
-    }
+    if (it == guilds.end() || !it->second.configured()) return note(NOT_SET_UP);
     GuildState& g = it->second;
 
     // Read-only commands: anyone can look, but outside the ship channel only they see the answer
-    if (name == "status" || name == "crew" || name == "shop" || name == "rename") {
-        Reply r = name == "status" ? status(g, c)
-                : name == "crew"   ? crewBoard(g)
-                : name == "shop"   ? shop(g)
-                                   : rename(g, arg);
+    if (name == "status" || name == "crew" || name == "shop") {
+        Reply r = name == "status" ? status(g, c) : name == "crew" ? crewBoard(g) : shop(g);
         if (c.channelId != g.channelId) r.ephemeral = true;
-        saveLocked();
         return r;
     }
 
     // Everything else is running the ship: crew only, and only on deck
     auto m = g.crew.find(c.userId);
-    if (m == g.crew.end() || !m->second.aboard) {
-        return privateNote("You're not part of the crew! Use `/join` to sign on.");
-    }
-    if (c.channelId != g.channelId) {
-        return privateNote("Ship business happens on deck: " + channelLink(g.channelId));
-    }
+    if (m == g.crew.end() || !m->second.aboard) return note(NOT_CREW);
+    if (c.channelId != g.channelId) return note("Use this in " + channelLink(g.channelId) + ".");
 
     Reply r;
     if (name == "sail") r = sail(g, c);
@@ -299,7 +285,7 @@ Reply Game::command(const std::string& name, const Ctx& c, const std::string& ar
     else if (name == "douse") r = fightHazard(g, c, EventKind::Fire);
     else if (name == "salvage") r = salvage(g, c);
     else if (name == "buy") r = buy(g, c, arg, amount);
-    else return privateNote("Unknown command.");
+    else return note("Unknown command.");
 
     saveLocked();
     return r;
@@ -308,9 +294,7 @@ Reply Game::command(const std::string& name, const Ctx& c, const std::string& ar
 std::optional<Reply> Game::onCooldown(const Ctx& c, Action a, int64_t seconds) {
     auto key = std::make_tuple(c.guildId, c.userId, static_cast<int>(a));
     auto it = cooldowns.find(key);
-    if (it != cooldowns.end() && it->second > c.now) {
-        return privateNote("Catch your breath! You can do that again " + when(it->second) + ".");
-    }
+    if (it != cooldowns.end() && it->second > c.now) return note("Ready again " + when(it->second) + ".");
     cooldowns[key] = c.now + seconds;
     return std::nullopt;
 }
@@ -320,85 +304,65 @@ std::optional<Reply> Game::onCooldown(const Ctx& c, Action a, int64_t seconds) {
 // ============================================================================
 
 Reply Game::help() {
-    Reply r = reply("\xF0\x9F\x8F\xB4\xE2\x80\x8D\xE2\x98\xA0\xEF\xB8\x8F Swashbot commands",
-        "**Crew**\n"
-        "`/join` `/leave` - sign on or off the crew (gives access to the ship channel)\n"
-        "`/status` - the ship, cargo and current situation\n"
-        "`/crew` - who's pulling their weight\n"
-        "`/leaderboard` - top ships across every server\n\n"
-        "**Sailing**\n"
-        "`/sail` / `/anchor` - set out (random events happen) or rest at anchor (nothing happens)\n"
-        "`/hunt` - look for a fight\n"
-        "`/raid` - raid an island for loot (might be guarded!)\n\n"
-        "**When things go wrong**\n"
-        "`/fire` - fire a broadside at the enemy\n"
-        "`/flee` - try to escape a fight\n"
-        "`/repair` - patch the hull with 1 wood\n"
-        "`/bail` - bail water during a storm\n"
-        "`/douse` - fight a fire aboard\n"
-        "`/salvage` - grab floating wreckage\n\n"
-        "**Port**\n"
-        "`/shop` - prices  \xE2\x80\xA2  `/buy` - buy wood or upgrades\n\n"
-        "**Admins**\n"
-        "`/setup` - repair the ship channel and crew role  \xE2\x80\xA2  `/rename` - name the ship");
+    Reply r = reply("🏴‍☠️ Commands",
+        "**Crew** `/join` `/leave` `/status` `/crew` `/leaderboard`\n"
+        "**Sail** `/sail` `/anchor` `/hunt` `/raid`\n"
+        "**Act** `/fire` `/flee` `/repair` `/bail` `/douse` `/salvage`\n"
+        "**Ship** `/shop` `/buy` `/name`");
+    r.footer = "Admins: /setup repairs the channel · /name renames instantly";
     r.ephemeral = true;
     return r;
 }
 
 Reply Game::status(GuildState& g, const Ctx& c) {
     const Ship& s = g.ship;
-    std::string body =
-        bold(s.info()) + "\n" +
-        "Hull: " + bar(s.getHp(), s.getMaxHp()) + "  \xE2\x80\xA2  AC " + std::to_string(s.getAc()) + "\n" +
-        "Gold: " + bold(withCommas(s.getGold())) + "  \xE2\x80\xA2  Wood: " + bold(std::to_string(s.getWood())) +
-        "  \xE2\x80\xA2  Firepower: " + bold(oneDecimal(s.firepower())) + "\n" +
-        "Score: " + bold(withCommas(g.score())) + "  \xE2\x80\xA2  Victories: " + std::to_string(g.stats.victories) +
-        "  \xE2\x80\xA2  Krakens: " + std::to_string(g.stats.krakens) + "  \xE2\x80\xA2  Sunk: " + std::to_string(g.stats.timesSunk) + "\n" +
-        "Crew: " + std::to_string(g.crewCount()) + "\n\n";
-
     const Event& e = g.event;
+
+    std::string state;
     if (e.isCombat()) {
-        body += "\xE2\x9A\x94\xEF\xB8\x8F **" + eventName(e.kind) + "!** " + e.foe.name + ": " + bar(e.foe.hp, e.foe.maxHp) +
-                "\nIt ends " + when(e.deadline) + ". `/fire` `/repair` `/flee`";
-    } else if (e.kind == EventKind::Storm || e.kind == EventKind::Fire) {
-        body += std::string(e.kind == EventKind::Storm ? "\xF0\x9F\x8C\x8A **Storm!** Water in the hold: " : "\xF0\x9F\x94\xA5 **Fire aboard!** Flames: ") +
-                bar(e.severity, e.startingSeverity) + "\nIt ends " + when(e.deadline) + ". " +
-                (e.kind == EventKind::Storm ? "`/bail`" : "`/douse`");
+        state = "⚔️ " + bold(e.foe.name) + " " + bar(e.foe.hp, e.foe.maxHp) + DOT + "ends " + when(e.deadline);
+    } else if (e.kind == EventKind::Storm) {
+        state = "🌊 Water " + bar(e.severity, e.startingSeverity) + DOT + "`/bail`";
+    } else if (e.kind == EventKind::Fire) {
+        state = "🔥 Flames " + bar(e.severity, e.startingSeverity) + DOT + "`/douse`";
     } else if (e.kind == EventKind::Wreckage) {
-        body += "\xF0\x9F\xAA\xB5 **Wreckage!** " + std::to_string(e.severity) + " wood and " + std::to_string(e.goldPool) +
-                " gold still floating. Drifts away " + when(e.deadline) + ". `/salvage`";
-    } else if (g.sailing) {
-        body += "\xE2\x9B\xB5 Sailing calm seas. Keep a weather eye out...";
+        state = "🪵 " + loot(e.goldPool, e.severity, "") + " floating" + DOT + "`/salvage`";
     } else {
-        body += "\xE2\x9A\x93 At anchor. Nothing will happen until someone uses `/sail`.";
-        if (s.getHp() < s.getMaxHp()) body += " The carpenter is slowly patching the hull meanwhile.";
+        state = g.sailing ? "⛵ Sailing" : "⚓ Anchored";
     }
+    if (g.nameVote.open(c.now)) state += "\n🏷️ Name vote: " + bold(g.nameVote.name);
 
-    if (g.nextRaidAt > c.now) body += "\nNext island raid possible " + when(g.nextRaidAt) + ".";
-
-    return reply(s.getName(), body, e.active() ? Tone::Alert : Tone::Info);
+    Reply r = reply("🚢 " + s.getName(),
+                    toString(s.getHull()) + " hull" + DOT + toString(s.getCannons()) + " cannons" + DOT +
+                    std::to_string(s.getGuns()) + " guns\n" + bar(s.getHp(), s.getMaxHp()) + " HP\n" + state,
+                    e.active() ? Tone::Alert : Tone::Info);
+    r.fields = {
+        { "Gold", num(s.getGold()) },
+        { "Wood", num(s.getWood()) },
+        { "Score", num(g.score()) },
+        { "Firepower", oneDecimal(s.firepower()) },
+        { "Victories", num(g.stats.victories) },
+        { "Crew", num(g.crewCount()) },
+    };
+    return r;
 }
 
 Reply Game::crewBoard(GuildState& g) {
-    std::vector<std::pair<uint64_t, const CrewMember*>> rows;
+    std::vector<const CrewMember*> rows;
     for (const auto& [id, m] : g.crew) {
-        if (m.aboard) rows.push_back({ id, &m });
+        if (m.aboard) rows.push_back(&m);
     }
-    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second->points > b.second->points; });
-
-    if (rows.empty()) return reply("Crew of " + g.ship.getName(), "Nobody's aboard yet! `/join` to sign on.");
+    std::sort(rows.begin(), rows.end(), [](const CrewMember* a, const CrewMember* b) { return a->points > b->points; });
+    if (rows.empty()) return reply("👥 Crew", "Nobody yet. `/join` to sign on.");
 
     std::string body;
-    int rank = 0;
-    for (const auto& [id, m] : rows) {
-        if (++rank > 15) break;
-        body += std::to_string(rank) + ". " + bold(m->name) + " - " + withCommas(m->points) + " pts  \xC2\xB7  " +
-                std::to_string(m->hits) + "/" + std::to_string(m->shots) + " hits, " + withCommas(m->damage) + " dmg, " +
-                std::to_string(m->repairs) + " repairs, " + std::to_string(m->hazardWork) + " hazard, " +
-                withCommas(m->plunder) + " gold looted\n";
+    for (size_t i = 0; i < rows.size() && i < 15; i++) {
+        body += std::to_string(i + 1) + ". " + bold(rows[i]->name) + DOT + num(rows[i]->points) + "\n";
     }
-    if (rows.size() > 15) body += "...and " + std::to_string(rows.size() - 15) + " more hands.";
-    return reply("Crew of " + g.ship.getName() + " (" + std::to_string(rows.size()) + ")", body);
+    if (rows.size() > 15) body += "+" + std::to_string(rows.size() - 15) + " more";
+    Reply r = reply("👥 Crew" + DOT + std::to_string(rows.size()), body);
+    r.footer = "Points for every action";
+    return r;
 }
 
 Reply Game::leaderboard(const std::string& categoryArg, uint64_t guildId) {
@@ -413,62 +377,163 @@ Reply Game::leaderboard(const std::string& categoryArg, uint64_t guildId) {
                  : category == "victories"   ? g.stats.victories
                  : category == "crew"        ? g.crewCount()
                                              : static_cast<double>(g.score());
-        rows.push_back({ id, g.ship.getName(), g.guildName.empty() ? "Unknown waters" : g.guildName, v });
+        rows.push_back({ id, g.ship.getName(), g.guildName.empty() ? "?" : g.guildName, v });
     }
     std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.value > b.value; });
 
-    auto show = [&](double v) { return category == "firepower" ? oneDecimal(v) : withCommas(static_cast<long long>(v)); };
-    static const char* medals[] = { "\xF0\x9F\xA5\x87", "\xF0\x9F\xA5\x88", "\xF0\x9F\xA5\x89" };
+    auto show = [&](double v) { return category == "firepower" ? oneDecimal(v) : num(static_cast<long long>(v)); };
+    static const char* medals[] = { "🥇", "🥈", "🥉" };
+    auto line = [&](size_t i) {
+        std::string place = i < 3 ? medals[i] : "`" + std::to_string(i + 1) + ".`";
+        return place + " " + bold(rows[i].ship) + DOT + show(rows[i].value) + DOT + "*" + rows[i].server + "*" +
+               (rows[i].guildId == guildId ? " ◀" : "") + "\n";
+    };
 
     std::string body;
-    for (size_t i = 0; i < rows.size() && i < 10; i++) {
-        std::string place = i < 3 ? medals[i] : "`#" + std::to_string(i + 1) + "`";
-        body += place + " " + bold(rows[i].ship) + " of *" + rows[i].server + "* - " + show(rows[i].value) +
-                (rows[i].guildId == guildId ? "  \xE2\x86\x90 you" : "") + "\n";
-    }
-    if (rows.empty()) body = "No ships on the seas yet!";
+    for (size_t i = 0; i < rows.size() && i < 10; i++) body += line(i);
     for (size_t i = 10; i < rows.size(); i++) {
-        if (rows[i].guildId == guildId) body += "...\n`#" + std::to_string(i + 1) + "` " + bold(rows[i].ship) + " - " + show(rows[i].value) + "  \xE2\x86\x90 you\n";
+        if (rows[i].guildId == guildId) body += "…\n" + line(i);
     }
+    if (rows.empty()) body = "No ships yet.";
 
-    std::string title = category == "gold" ? "Richest ships (gold in the hold)"
-                      : category == "firepower" ? "Most firepower (damage per broadside)"
-                      : category == "victories" ? "Most victories"
-                      : category == "crew" ? "Biggest crews"
-                      : "Top ships by score";
-    body += "\n*Score = lifetime gold + 150/victory + 300/kraken + 50/hazard weathered + 25/raid - 200/time sunk*";
-    return reply("\xF0\x9F\x8F\x86 " + title, body, Tone::Info);
+    std::string title = category == "gold" ? "Gold"
+                      : category == "firepower" ? "Firepower"
+                      : category == "victories" ? "Victories"
+                      : category == "crew" ? "Crew size"
+                      : "Score";
+    Reply r = reply("🏆 Leaderboard" + DOT + title, body);
+    if (category == "score") r.footer = "Score = gold earned + bonuses for wins − sinkings";
+    if (category == "firepower") r.footer = "Average damage per broadside";
+    return r;
 }
 
 Reply Game::shop(GuildState& g) {
     const Ship& s = g.ship;
-    std::string body = "Gold in the hold: " + bold(withCommas(s.getGold())) + "\n\n";
-    body += "`/buy wood <amount>` - " + std::to_string(Tuning::WOOD_PRICE) + " gold each (you have " + std::to_string(s.getWood()) + ")\n";
+    std::string body = "`wood` " + std::to_string(Tuning::WOOD_PRICE) + "g each\n";
 
     switch (s.getHull()) {
-    case Hull::Wood: body += "`/buy hull` - Steel hull (200 HP, AC 15): " + withCommas(Tuning::STEEL_HULL_PRICE) + " gold\n"; break;
-    case Hull::Steel: body += "`/buy hull` - Crystal hull (300 HP, AC 18): " + withCommas(Tuning::CRYSTAL_HULL_PRICE) + " gold\n"; break;
-    case Hull::Crystal: body += "Hull: Crystal - the finest afloat\n"; break;
+    case Hull::Wood: body += "`hull` Steel" + DOT + num(Tuning::STEEL_HULL_PRICE) + "g\n"; break;
+    case Hull::Steel: body += "`hull` Crystal" + DOT + num(Tuning::CRYSTAL_HULL_PRICE) + "g\n"; break;
+    case Hull::Crystal: body += "`hull` maxed\n"; break;
     }
     switch (s.getCannons()) {
-    case Cannons::Iron: body += "`/buy cannons` - Silver cannons (+4 to hit, d40): " + withCommas(Tuning::SILVER_CANNON_PRICE) + " gold\n"; break;
-    case Cannons::Silver: body += "`/buy cannons` - Gold cannons (+6 to hit, d60): " + withCommas(Tuning::GOLD_CANNON_PRICE) + " gold\n"; break;
-    case Cannons::Gold: body += "Cannons: Gold - nothing better\n"; break;
+    case Cannons::Iron: body += "`cannons` Silver" + DOT + num(Tuning::SILVER_CANNON_PRICE) + "g\n"; break;
+    case Cannons::Silver: body += "`cannons` Gold" + DOT + num(Tuning::GOLD_CANNON_PRICE) + "g\n"; break;
+    case Cannons::Gold: body += "`cannons` maxed\n"; break;
     }
-    if (s.getGuns() < MAX_GUNS) {
-        body += "`/buy gun` - gun #" + std::to_string(s.getGuns() + 1) + ": " + withCommas(Tuning::GUN_PRICE_PER_GUN * s.getGuns()) + " gold\n";
-    } else {
-        body += "Guns: " + std::to_string(MAX_GUNS) + " - every port is full\n";
-    }
-    return reply("\xF0\x9F\x8F\xAA Port shop", body);
+    body += s.getGuns() < MAX_GUNS
+          ? "`gun` #" + std::to_string(s.getGuns() + 1) + DOT + num(Tuning::GUN_PRICE_PER_GUN * s.getGuns()) + "g"
+          : "`gun` maxed";
+
+    Reply r = reply("🏪 Shop", body);
+    r.footer = num(s.getGold()) + " gold · /buy <item>";
+    return r;
 }
 
-Reply Game::rename(GuildState& g, const std::string& raw) {
-    std::string name = cleanName(raw);
-    if (name.empty()) return privateNote("That name won't fit on the stern. Use letters, numbers and spaces.");
-    std::string old = g.ship.getName();
+// ============================================================================
+// Naming the ship
+// ============================================================================
+
+std::string Game::voteButtonId(int voteId) { return "vote:" + std::to_string(voteId); }
+
+int Game::parseVoteButtonId(const std::string& id) {
+    if (id.rfind("vote:", 0) != 0) return 0;
+    try {
+        return std::stoi(id.substr(5));
+    } catch (...) {
+        return 0;
+    }
+}
+
+void Game::applyName(GuildState& g, const std::string& name) {
     g.ship.setName(name);
-    return reply("\xF0\x9F\x8E\xA8 A new name!", bold(old) + " shall henceforth be known as " + bold(name) + ".", Tone::Good);
+    g.nameVote = NameVote{};
+}
+
+Reply Game::voteMessage(const GuildState& g, int64_t now) {
+    const NameVote& v = g.nameVote;
+    (void)now;
+    Reply r = reply("🏷️ Rename the ship?",
+                    bold(v.proposerName) + " proposes " + bold(v.name) + "\n" +
+                    "Aye " + std::to_string(g.ayesFromCrew()) + "/" + std::to_string(g.votesNeeded()) + DOT + "closes " + when(v.closesAt));
+    r.button = Reply::Button{ voteButtonId(v.id), "Aye" };
+    return r;
+}
+
+Reply Game::nameShip(const Ctx& c, const std::string& raw, bool isAdmin) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = guilds.find(c.guildId);
+    if (it == guilds.end() || !it->second.configured()) return note(NOT_SET_UP);
+    GuildState& g = it->second;
+
+    std::string name = cleanName(raw);
+    if (name.empty()) return note("Use letters, numbers and spaces (40 max).");
+
+    // Admins skip the vote
+    if (isAdmin) {
+        applyName(g, name);
+        saveLocked();
+        Reply r = reply("🏷️ Renamed", bold(c.userName) + " named the ship " + bold(name) + ".", Tone::Good);
+        if (c.channelId != g.channelId) r.ephemeral = true;
+        return r;
+    }
+
+    auto m = g.crew.find(c.userId);
+    if (m == g.crew.end() || !m->second.aboard) return note(NOT_CREW);
+    if (c.channelId != g.channelId) return note("Use this in " + channelLink(g.channelId) + ".");
+    if (g.nameVote.open(c.now)) return note("A vote for " + bold(g.nameVote.name) + " is already open.");
+
+    g.nameVote = NameVote{};
+    g.nameVote.id = g.nextVoteId++;
+    g.nameVote.name = name;
+    g.nameVote.proposerName = c.userName;
+    g.nameVote.ayes.insert(c.userId);  // proposing counts as voting aye
+    g.nameVote.closesAt = c.now + Tuning::NAME_VOTE_DURATION;
+
+    // A crew of one or two: the proposer alone is already half
+    if (g.ayesFromCrew() >= g.votesNeeded()) {
+        applyName(g, name);
+        saveLocked();
+        return reply("🏷️ Renamed", "The ship is now " + bold(name) + ".", Tone::Good);
+    }
+    saveLocked();
+    return voteMessage(g, c.now);
+}
+
+Reply Game::voteOnName(const Ctx& c, int voteId) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = guilds.find(c.guildId);
+    if (it == guilds.end() || !it->second.configured()) return note(NOT_SET_UP);
+    GuildState& g = it->second;
+
+    auto m = g.crew.find(c.userId);
+    if (m == g.crew.end() || !m->second.aboard) return note("Only crew can vote. `/join` first.");
+
+    NameVote& v = g.nameVote;
+    if (v.id != voteId || !v.open(c.now)) {
+        Reply closed = reply("🏷️ Vote closed", v.id == voteId ? bold(v.name) + " didn't get enough votes." : "This vote is over.");
+        closed.editsOriginal = true;
+        if (v.id == voteId) {
+            v = NameVote{};
+            saveLocked();
+        }
+        return closed;
+    }
+    if (v.ayes.count(c.userId) != 0) return note("You already voted.");
+
+    v.ayes.insert(c.userId);
+    if (g.ayesFromCrew() >= g.votesNeeded()) {
+        std::string name = v.name;
+        applyName(g, name);
+        saveLocked();
+        Reply done = reply("🏷️ Renamed", "The ship is now " + bold(name) + ".", Tone::Good);
+        done.editsOriginal = true;
+        return done;
+    }
+    saveLocked();
+    Reply update = voteMessage(g, c.now);
+    update.editsOriginal = true;
+    return update;
 }
 
 // ============================================================================
@@ -476,40 +541,38 @@ Reply Game::rename(GuildState& g, const std::string& raw) {
 // ============================================================================
 
 Reply Game::sail(GuildState& g, const Ctx& c) {
-    if (g.sailing) return privateNote("We're already under sail!");
+    if (g.sailing) return note("Already sailing.");
     const Ship& s = g.ship;
     if (s.getHp() * 100 < s.getMaxHp() * Tuning::MIN_SAIL_HP_PERCENT) {
-        return privateNote("She's in no state to sail (" + std::to_string(s.getHp()) + "/" + std::to_string(s.getMaxHp()) +
-                           " HP). `/repair` her first, or wait - the carpenter patches her up while we're at anchor.");
+        return note("Too damaged to sail (" + std::to_string(s.getHp()) + "/" + std::to_string(s.getMaxHp()) + " HP). `/repair` first.");
     }
     g.sailing = true;
     g.ignoredEvents = 0;
     g.nextDockRepairAt = 0;
     g.nextEventAt = c.now + rng.range(Tuning::FIRST_EVENT_MIN, Tuning::FIRST_EVENT_MAX);
-    return reply("\xE2\x9B\xB5 Anchors aweigh!", bold(c.userName) + " raises the anchor. " + g.ship.getName() +
-                 " heads for open water - stay sharp, crew.", Tone::Good);
+    return reply("⛵ Sailing", bold(c.userName) + " raised anchor.", Tone::Good);
 }
 
 Reply Game::anchor(GuildState& g, const Ctx& c) {
-    if (!g.sailing) return privateNote("We're already at anchor.");
-    if (g.event.active()) return privateNote("Can't drop anchor now - deal with the " + eventName(g.event.kind) + " first!");
+    if (!g.sailing) return note("Already anchored.");
+    if (g.event.active()) return note("Can't anchor during an event.");
     g.sailing = false;
-    return reply("\xE2\x9A\x93 Anchor dropped", bold(c.userName) + " drops anchor in a quiet cove. Nothing will happen until someone uses `/sail`.");
+    return reply("⚓ Anchored", bold(c.userName) + " dropped anchor. No events until `/sail`.");
 }
 
 Reply Game::hunt(GuildState& g, const Ctx& c) {
-    if (g.event.active()) return privateNote("We've got our hands full already! (" + eventName(g.event.kind) + ")");
-    if (!g.sailing) return privateNote("We're at anchor. `/sail` first.");
+    if (g.event.active()) return note(BUSY);
+    if (!g.sailing) return note("Anchored. `/sail` first.");
     member(g, c).points += 1;
     Reply r = beginEvent(g, EventKind::EnemyShip, c.now);
-    r.body = bold(c.userName) + " spots sails on the horizon and gives chase!\n\n" + r.body;
+    r.footer = c.userName + " went hunting";
     return r;
 }
 
 Reply Game::raid(GuildState& g, const Ctx& c) {
-    if (g.event.active()) return privateNote("We've got our hands full already! (" + eventName(g.event.kind) + ")");
-    if (!g.sailing) return privateNote("We're at anchor. `/sail` first.");
-    if (g.nextRaidAt > c.now) return privateNote("The nearby islands are picked clean. Next raid possible " + when(g.nextRaidAt) + ".");
+    if (g.event.active()) return note(BUSY);
+    if (!g.sailing) return note("Anchored. `/sail` first.");
+    if (g.nextRaidAt > c.now) return note("Islands are picked clean. Next raid " + when(g.nextRaidAt) + ".");
 
     g.nextRaidAt = c.now + Tuning::RAID_COOLDOWN;
     CrewMember& m = member(g, c);
@@ -517,8 +580,8 @@ Reply Game::raid(GuildState& g, const Ctx& c) {
     // Same idea as the original /loot: sometimes the island is guarded
     if (rng.chance(35)) {
         Reply r = beginEvent(g, EventKind::EnemyShip, c.now);
-        r.title = "\xE2\x9A\x94\xEF\xB8\x8F Ambush!";
-        r.body = bold(c.userName) + " leads a landing party - but the cove was a trap!\n\n" + r.body;
+        r.title = "⚔️ Ambush!";
+        r.footer = c.userName + "'s raid was a trap";
         return r;
     }
 
@@ -530,8 +593,7 @@ Reply Game::raid(GuildState& g, const Ctx& c) {
     g.stats.raids++;
     m.plunder += gold;
     m.points += 3;
-    return reply("\xF0\x9F\x8F\x9D\xEF\xB8\x8F Island raided!", bold(c.userName) + " leads a landing party and comes back with " +
-                 bold(std::to_string(gold) + " gold") + (wood > 0 ? " and " + bold(std::to_string(wood) + " wood") : "") + ".", Tone::Good);
+    return reply("🏝️ Raid", bold(c.userName) + DOT + loot(gold, wood), Tone::Good);
 }
 
 // ============================================================================
@@ -540,7 +602,7 @@ Reply Game::raid(GuildState& g, const Ctx& c) {
 
 Reply Game::fire(GuildState& g, const Ctx& c) {
     Event& e = g.event;
-    if (!e.isCombat()) return privateNote("Nobody to shoot at! Use `/hunt` to go looking for a fight.");
+    if (!e.isCombat()) return note("Nothing to shoot. `/hunt` to find a fight.");
     if (auto cd = onCooldown(c, Action::Fire, Tuning::CD_FIRE)) return *cd;
 
     e.crewResponded = true;
@@ -553,41 +615,45 @@ Reply Game::fire(GuildState& g, const Ctx& c) {
     m.damage += b.damage;
     m.points += 1 + b.damage / 10;
 
-    std::string body = bold(c.userName) + " fires a broadside: " + std::to_string(b.hits) + "/" + std::to_string(b.shots) +
-                       " shots hit" + (b.damage > 0 ? " for " + bold(std::to_string(b.damage) + " damage") : "") + "!\n";
+    std::string shot = bold(c.userName) + DOT + std::to_string(b.hits) + "/" + std::to_string(b.shots) + " hits" +
+                       (b.damage > 0 ? DOT + std::to_string(b.damage) + " dmg" : "");
     if (e.foe.hp <= 0) {
         m.points += 10;
-        body += "\n" + winFight(g, c.now);
-        return reply("\xF0\x9F\x92\xA5 Direct hit!", body, Tone::Good);
+        EventKind kind = e.kind;
+        std::string foe = e.foe.name;
+        std::string spoils = winFight(g, c.now);
+        std::string title = kind == EventKind::Kraken ? "🏆 Kraken slain" : kind == EventKind::Merchant ? "🏆 Prize taken" : "🏆 Victory";
+        std::string verb = kind == EventKind::Kraken ? " drove off " : kind == EventKind::Merchant ? " captured " : " sank ";
+        return reply(title, bold(c.userName) + verb + bold(foe) + ".\n" + spoils, Tone::Good);
     }
-    body += e.foe.name + ": " + bar(e.foe.hp, e.foe.maxHp);
-    return reply(b.hits > 0 ? "\xF0\x9F\x92\xA5 Broadside!" : "\xF0\x9F\x92\xA8 Missed!", body, b.hits > 0 ? Tone::Good : Tone::Info);
+    return reply(b.hits > 0 ? "💥 Hit" : "💨 Miss", shot + "\nEnemy " + bar(e.foe.hp, e.foe.maxHp), b.hits > 0 ? Tone::Good : Tone::Info);
 }
 
 Reply Game::flee(GuildState& g, const Ctx& c) {
     Event& e = g.event;
-    if (!e.isCombat()) return privateNote("Not in a fight - nothing to run from.");
+    if (!e.isCombat()) return note("Not in a fight.");
     if (auto cd = onCooldown(c, Action::Flee, Tuning::CD_FLEE)) return *cd;
     e.crewResponded = true;
 
     if (e.kind == EventKind::Merchant) {
-        std::string text = bold(c.userName) + " lets " + e.foe.name + " sail on unmolested.\n" + endEvent(g, c.now);
-        return reply("\xF0\x9F\x91\x8B Let them go", text);
+        std::string foe = e.foe.name;
+        return reply("👋 Let go", bold(c.userName) + " let " + bold(foe) + " pass." + endEvent(g, c.now));
     }
 
     int odds = e.kind == EventKind::Kraken ? 40 : 50;
     if (rng.chance(odds)) {
-        std::string text = bold(c.userName) + " catches the wind and we slip away from " + e.foe.name + "!\n" + endEvent(g, c.now);
-        return reply("\xF0\x9F\x92\xA8 Got away!", text, Tone::Good);
+        return reply("💨 Escaped", bold(c.userName) + " got us away." + endEvent(g, c.now), Tone::Good);
     }
-    std::string text = bold(c.userName) + " tries to run, but " + e.foe.name + " cuts us off!\n" + foeVolley(g, c.now);
-    return reply("\xE2\x9D\x8C Couldn't get away!", text, Tone::Bad);
+    int sunkBefore = g.stats.timesSunk;
+    std::string volley = foeVolley(g, c.now);
+    if (g.stats.timesSunk > sunkBefore) return reply("💀 Sunk", volley, Tone::Bad);
+    return reply("❌ Can't escape", volley + "\nHull " + bar(g.ship.getHp(), g.ship.getMaxHp()), Tone::Bad);
 }
 
 Reply Game::repair(GuildState& g, const Ctx& c) {
     Ship& s = g.ship;
-    if (s.getHp() >= s.getMaxHp()) return privateNote("The hull's already in top shape!");
-    if (s.getWood() <= 0) return privateNote("We're out of wood! `/buy wood` in port or `/salvage` some.");
+    if (s.getHp() >= s.getMaxHp()) return note("Hull is already full.");
+    if (s.getWood() <= 0) return note("No wood. `/buy wood` or `/salvage`.");
     if (auto cd = onCooldown(c, Action::Repair, Tuning::CD_REPAIR)) return *cd;
 
     int healed = s.repair();
@@ -595,15 +661,14 @@ Reply Game::repair(GuildState& g, const Ctx& c) {
     m.repairs++;
     m.points += 2;
     if (g.event.active()) g.event.crewResponded = true;
-    return reply("\xF0\x9F\x94\xA8 Repairs", bold(c.userName) + " patches the hull (+" + std::to_string(healed) + " HP).\nHull: " +
-                 bar(s.getHp(), s.getMaxHp()) + "  \xE2\x80\xA2  Wood left: " + std::to_string(s.getWood()), Tone::Good);
+    return reply("🔨 Repaired", bold(c.userName) + DOT + "+" + std::to_string(healed) + " HP" + DOT + std::to_string(s.getWood()) +
+                 " wood left\nHull " + bar(s.getHp(), s.getMaxHp()), Tone::Good);
 }
 
 Reply Game::fightHazard(GuildState& g, const Ctx& c, EventKind kind) {
     Event& e = g.event;
-    if (e.kind != kind) {
-        return privateNote(kind == EventKind::Storm ? "The hold is dry - no water to bail." : "Nothing's on fire. Yet.");
-    }
+    bool storm = kind == EventKind::Storm;
+    if (e.kind != kind) return note(storm ? "No storm right now." : "Nothing's on fire.");
     if (auto cd = onCooldown(c, Action::Hazard, Tuning::CD_HAZARD)) return *cd;
 
     e.crewResponded = true;
@@ -613,25 +678,22 @@ Reply Game::fightHazard(GuildState& g, const Ctx& c, EventKind kind) {
     m.hazardWork++;
     m.points += 2;
 
-    bool storm = kind == EventKind::Storm;
-    std::string body = bold(c.userName) + (storm ? " bails furiously" : " hauls buckets onto the flames") +
-                       " (-" + std::to_string(amount) + ").\n";
     if (e.severity <= 0) {
         int bonus = rng.range(15, 40);
         g.ship.addGold(bonus);
         g.stats.lifetimeGold += bonus;
         g.stats.hazardsWeathered++;
-        body += storm ? "\nThe storm breaks and the sun comes out! " : "\nThe last ember hisses out! ";
-        body += "Tidying up, the crew finds " + std::to_string(bonus) + " gold that rolled under the barrels.\n" + endEvent(g, c.now);
-        return reply(storm ? "\xE2\x98\x80\xEF\xB8\x8F Storm weathered!" : "\xF0\x9F\x9A\x92 Fire's out!", body, Tone::Good);
+        return reply(storm ? "☀️ Storm beaten" : "🚒 Fire out",
+                     bold(c.userName) + " finished it" + DOT + "+" + std::to_string(bonus) + " gold" + endEvent(g, c.now), Tone::Good);
     }
-    body += (storm ? "Water in the hold: " : "Flames: ") + bar(e.severity, e.startingSeverity);
-    return reply(storm ? "\xF0\x9F\xAA\xA3 Bailing!" : "\xF0\x9F\x92\xA7 Dousing!", body);
+    return reply(storm ? "🪣 Bailing" : "💧 Dousing",
+                 bold(c.userName) + DOT + "−" + std::to_string(amount) + "\n" + (storm ? "Water " : "Flames ") +
+                 bar(e.severity, e.startingSeverity));
 }
 
 Reply Game::salvage(GuildState& g, const Ctx& c) {
     Event& e = g.event;
-    if (e.kind != EventKind::Wreckage) return privateNote("Nothing floating nearby worth grabbing.");
+    if (e.kind != EventKind::Wreckage) return note("Nothing to salvage.");
     if (auto cd = onCooldown(c, Action::Salvage, Tuning::CD_SALVAGE)) return *cd;
 
     e.crewResponded = true;
@@ -647,31 +709,25 @@ Reply Game::salvage(GuildState& g, const Ctx& c) {
     m.plunder += gold;
     m.points += 1 + (gold + wood * 5) / 10;
 
-    std::string body = bold(c.userName) + " fishes out " + std::to_string(wood) + " wood" +
-                       (gold > 0 ? " and " + std::to_string(gold) + " gold" : "") + ".\n";
+    std::string got = bold(c.userName) + DOT + loot(gold, wood);
     if (e.severity <= 0 && e.goldPool <= 0) {
-        body += "That's the last of it - picked clean!\n" + endEvent(g, c.now);
-        return reply("\xF0\x9F\xAA\xB5 Salvage complete", body, Tone::Good);
+        return reply("🪵 All salvaged", got + endEvent(g, c.now), Tone::Good);
     }
-    body += "Still floating: " + std::to_string(e.severity) + " wood, " + std::to_string(e.goldPool) + " gold.";
-    return reply("\xF0\x9F\xAA\xB5 Salvaging", body, Tone::Good);
+    return reply("🪵 Salvage", got + "\nLeft: " + loot(e.goldPool, e.severity, ""), Tone::Good);
 }
 
 Reply Game::buy(GuildState& g, const Ctx& c, const std::string& item, int64_t amount) {
-    if (g.event.active()) return privateNote("No shopping in the middle of a " + eventName(g.event.kind) + "!");
+    if (g.event.active()) return note("Can't shop during an event.");
     Ship& s = g.ship;
 
     auto afford = [&](int price) -> std::optional<Reply> {
-        if (s.getGold() < price) {
-            return privateNote("That costs " + withCommas(price) + " gold, but we only have " + withCommas(s.getGold()) + ".");
-        }
+        if (s.getGold() < price) return note("Costs " + num(price) + " gold. You have " + num(s.getGold()) + ".");
         return std::nullopt;
     };
     auto bought = [&](int price, const std::string& what) {
         s.addGold(-price);
         member(g, c).points += 1;
-        return reply("\xF0\x9F\x9B\x92 Purchase", bold(c.userName) + " buys " + what + " for " + withCommas(price) +
-                     " gold. " + withCommas(s.getGold()) + " gold left.", Tone::Good);
+        return reply("🛒 Bought", bold(c.userName) + DOT + what + DOT + "−" + num(price) + " gold\n" + num(s.getGold()) + " gold left", Tone::Good);
     };
 
     if (item == "wood") {
@@ -682,15 +738,15 @@ Reply Game::buy(GuildState& g, const Ctx& c, const std::string& item, int64_t am
         return bought(price, std::to_string(qty) + " wood");
     }
     if (item == "hull") {
-        if (s.getHull() == Hull::Crystal) return privateNote("We already have the best hull there is.");
+        if (s.getHull() == Hull::Crystal) return note("Hull is already maxed.");
         Hull next = hullFromTier(tier(s.getHull()) + 1);
         int price = next == Hull::Steel ? Tuning::STEEL_HULL_PRICE : Tuning::CRYSTAL_HULL_PRICE;
         if (auto no = afford(price)) return *no;
         s.setHull(next);
-        return bought(price, "a " + toString(next) + " hull");
+        return bought(price, toString(next) + " hull");
     }
     if (item == "cannons") {
-        if (s.getCannons() == Cannons::Gold) return privateNote("Our cannons are already solid gold.");
+        if (s.getCannons() == Cannons::Gold) return note("Cannons are already maxed.");
         Cannons next = cannonsFromTier(tier(s.getCannons()) + 1);
         int price = next == Cannons::Silver ? Tuning::SILVER_CANNON_PRICE : Tuning::GOLD_CANNON_PRICE;
         if (auto no = afford(price)) return *no;
@@ -698,13 +754,13 @@ Reply Game::buy(GuildState& g, const Ctx& c, const std::string& item, int64_t am
         return bought(price, toString(next) + " cannons");
     }
     if (item == "gun") {
-        if (s.getGuns() >= MAX_GUNS) return privateNote("Every gun port is already full.");
+        if (s.getGuns() >= MAX_GUNS) return note("Guns are already maxed.");
         int price = Tuning::GUN_PRICE_PER_GUN * s.getGuns();
         if (auto no = afford(price)) return *no;
         s.setGuns(s.getGuns() + 1);
         return bought(price, "gun #" + std::to_string(s.getGuns()));
     }
-    return privateNote("The shopkeeper squints. Choose wood, hull, cannons or gun.");
+    return note("Choose wood, hull, cannons or gun.");
 }
 
 // ============================================================================
@@ -752,10 +808,9 @@ Reply Game::beginEvent(GuildState& g, EventKind kind, int64_t now) {
         e.foe.woodReward = rng.range(2, 6);
         e.deadline = now + Tuning::COMBAT_DURATION;
         e.nextPulseAt = now + Tuning::COMBAT_FIRST_VOLLEY;
-        r.title = "\xE2\x9A\x94\xEF\xB8\x8F Enemy attack!";
-        r.body = "Pirates! **" + e.foe.name + "**, a " + enemy.info() + ", is bearing down on us!\n\n"
-                 "`/fire` to fight back  \xE2\x80\xA2  `/repair` to patch holes  \xE2\x80\xA2  `/flee` to run\n"
-                 "If they're still afloat " + when(e.deadline) + " they'll board us and plunder the hold.";
+        r.title = "⚔️ Pirates!";
+        r.body = bold(e.foe.name) + DOT + toString(enemy.getHull()) + DOT + toString(enemy.getCannons()) + DOT +
+                 std::to_string(enemy.getGuns()) + " guns\n`/fire` `/repair` `/flee`" + DOT + "they board " + when(e.deadline);
         break;
     }
     case EventKind::Merchant:
@@ -769,10 +824,8 @@ Reply Game::beginEvent(GuildState& g, EventKind kind, int64_t now) {
         e.foe.woodReward = rng.range(3, 8);
         e.deadline = now + Tuning::COMBAT_DURATION;
         e.nextPulseAt = now + Tuning::COMBAT_FIRST_VOLLEY;
-        r.title = "\xF0\x9F\x92\xB0 Merchant sighted!";
-        r.body = "A fat merchant ship, **" + e.foe.name + "**, wallows past loaded with cargo. Barely armed!\n\n"
-                 "`/fire` to take her as a prize  \xE2\x80\xA2  `/flee` to let her go\n"
-                 "She'll be over the horizon " + when(e.deadline) + ".";
+        r.title = "💰 Merchant";
+        r.body = bold(e.foe.name) + DOT + "light guns, full hold\n`/fire` to capture" + DOT + "leaves " + when(e.deadline);
         r.tone = Tone::Good;
         break;
     case EventKind::Kraken:
@@ -786,37 +839,30 @@ Reply Game::beginEvent(GuildState& g, EventKind kind, int64_t now) {
         e.foe.woodReward = 0;
         e.deadline = now + Tuning::COMBAT_DURATION;
         e.nextPulseAt = now + Tuning::COMBAT_FIRST_VOLLEY;
-        r.title = "\xF0\x9F\x90\x99 KRAKEN!";
-        r.body = "The sea boils and great tentacles wrap around the hull!\n\n"
-                 "`/fire` point-blank  \xE2\x80\xA2  `/repair` what it crushes  \xE2\x80\xA2  `/flee` (it's hard to outrun)\n"
-                 "If it's still clinging on " + when(e.deadline) + " it'll drag our cargo into the deep as it lets go.";
+        r.title = "🐙 Kraken!";
+        r.body = "Tentacles on the hull.\n`/fire` `/repair` `/flee`" + DOT + "lets go " + when(e.deadline);
         break;
     case EventKind::Storm:
         e.startingSeverity = e.severity = rng.range(35, 55) + 10 * hullTier;
         e.deadline = now + Tuning::HAZARD_DURATION;
         e.nextPulseAt = now + Tuning::HAZARD_PULSE_EVERY;
-        r.title = "\xF0\x9F\x8C\x8A Storm!";
-        r.body = "Black clouds and towering waves - water is pouring into the hold!\n\n"
-                 "`/bail` to pump it out. Every minute the water does damage, and whatever's left " + when(e.deadline) +
-                 " hits us all at once.\nWater in the hold: " + bar(e.severity, e.startingSeverity);
+        r.title = "🌊 Storm!";
+        r.body = "Water " + bar(e.severity, e.startingSeverity) + "\n`/bail`" + DOT + "ends " + when(e.deadline);
         break;
     case EventKind::Fire:
         e.startingSeverity = e.severity = rng.range(30, 50) + 10 * hullTier;
         e.deadline = now + Tuning::HAZARD_DURATION;
         e.nextPulseAt = now + Tuning::HAZARD_PULSE_EVERY;
-        r.title = "\xF0\x9F\x94\xA5 Fire aboard!";
-        r.body = "A lantern tipped over in the hold and the fire is spreading!\n\n"
-                 "`/douse` to put it out. It burns the hull and our wood supply every minute until it's out or burns itself out " +
-                 when(e.deadline) + ".\nFlames: " + bar(e.severity, e.startingSeverity);
+        r.title = "🔥 Fire!";
+        r.body = "Flames " + bar(e.severity, e.startingSeverity) + "\n`/douse`" + DOT + "burns out " + when(e.deadline);
         break;
     case EventKind::Wreckage:
         e.startingSeverity = e.severity = rng.range(8, 16);
         e.goldPool = rng.range(30, 90);
         e.deadline = now + Tuning::BOUNTY_DURATION;
         e.nextPulseAt = e.deadline;
-        r.title = "\xF0\x9F\xAA\xB5 Wreckage ahoy!";
-        r.body = "Some poor ship's wreckage is floating past - " + std::to_string(e.severity) + " planks and a few strongboxes!\n\n"
-                 "`/salvage` to haul it aboard before it drifts off " + when(e.deadline) + ".";
+        r.title = "🪵 Wreckage";
+        r.body = loot(e.goldPool, e.severity, "") + " floating\n`/salvage`" + DOT + "drifts off " + when(e.deadline);
         r.tone = Tone::Good;
         break;
     case EventKind::None:
@@ -827,7 +873,7 @@ Reply Game::beginEvent(GuildState& g, EventKind kind, int64_t now) {
     return r;
 }
 
-// Enemy shoots at us. Returns a line describing it (and the sinking, if that happens).
+// Enemy shoots at us. Returns "2/3 hits · −18 HP" (plus the sinking report if that happens).
 std::string Game::foeVolley(GuildState& g, int64_t now) {
     Foe& f = g.event.foe;
     int hits = 0, damage = 0;
@@ -838,32 +884,26 @@ std::string Game::foeVolley(GuildState& g, int64_t now) {
         }
     }
     damage = g.ship.takeDamage(damage);
-    bool kraken = g.event.kind == EventKind::Kraken;
-
-    std::string text = f.name + (kraken ? " lashes out: " : " fires: ") + std::to_string(hits) + "/" + std::to_string(f.guns) +
-                       (kraken ? " tentacles connect" : " shots hit") + (damage > 0 ? " for " + bold(std::to_string(damage) + " damage") : "") + ".\n" +
-                       "Our hull: " + bar(g.ship.getHp(), g.ship.getMaxHp()) + "\n";
+    std::string text = damage == 0 ? "Missed us"
+                     : std::to_string(hits) + "/" + std::to_string(f.guns) +
+                       (g.event.kind == EventKind::Kraken ? " tentacles" : " hits") + DOT + "−" + std::to_string(damage) + " HP";
     if (g.ship.sunk()) text += "\n" + sink(g, now);
     return text;
 }
 
+// Collect the spoils. Returns "+180 gold · +4 wood".
 std::string Game::winFight(GuildState& g, int64_t now) {
     Event& e = g.event;
-    g.ship.addGold(e.foe.goldReward);
-    g.ship.addWood(e.foe.woodReward);
-    g.stats.lifetimeGold += e.foe.goldReward;
+    int gold = e.foe.goldReward, wood = e.foe.woodReward;
+    g.ship.addGold(gold);
+    g.ship.addWood(wood);
+    g.stats.lifetimeGold += gold;
     if (e.kind == EventKind::Kraken) g.stats.krakens++;
     else g.stats.victories++;
-
-    std::string text = e.kind == EventKind::Kraken ? "\xF0\x9F\x90\x99 The Kraken shrieks and sinks back into the deep!"
-                     : e.kind == EventKind::Merchant ? "\xF0\x9F\x8F\xB3\xEF\xB8\x8F " + e.foe.name + " strikes her colours - she's ours!"
-                                                     : "\xE2\x98\xA0\xEF\xB8\x8F " + e.foe.name + " goes down in flames!";
-    text += "\nPlunder: " + bold(std::to_string(e.foe.goldReward) + " gold") +
-            (e.foe.woodReward > 0 ? " and " + bold(std::to_string(e.foe.woodReward) + " wood") : "") + ".\n";
-    return text + endEvent(g, now);
+    return loot(gold, wood) + endEvent(g, now);
 }
 
-// Our ship goes down. Lose a chunk of the cargo, limp back to port at anchor.
+// Our ship goes down. Lose a chunk of the cargo, get towed to port at anchor.
 std::string Game::sink(GuildState& g, int64_t now) {
     Ship& s = g.ship;
     int goldLost = s.getGold() * Tuning::SINK_GOLD_LOSS_PERCENT / 100;
@@ -877,12 +917,11 @@ std::string Game::sink(GuildState& g, int64_t now) {
     g.ignoredEvents = 0;
     g.nextEventAt = 0;
     g.nextDockRepairAt = now + Tuning::DOCK_REPAIR_EVERY;
-    return "\xF0\x9F\x92\x80 **We're going down!** The crew scrambles into the boats. " + std::to_string(goldLost) +
-           " gold and " + std::to_string(woodLost) + " wood sink with the hold.\n"
-           "The ship is towed into port, patched to " + std::to_string(s.getHp()) + " HP and left at anchor. `/sail` when ready.";
+    return "Lost " + loot(goldLost, woodLost, "") + ".\nTowed to port at " + std::to_string(s.getHp()) + "/" +
+           std::to_string(s.getMaxHp()) + " HP" + DOT + "`/sail` when ready";
 }
 
-// Clears the current event and schedules the next one. Anchors automatically if nobody's around.
+// Clears the current event and schedules the next one. Returns an extra line if the ship anchors itself.
 std::string Game::endEvent(GuildState& g, int64_t now) {
     bool responded = g.event.crewResponded;
     g.event = Event{};
@@ -892,13 +931,12 @@ std::string Game::endEvent(GuildState& g, int64_t now) {
     const Ship& s = g.ship;
     if (g.sailing && s.getHp() * 100 < s.getMaxHp() * Tuning::MIN_SAIL_HP_PERCENT) {
         g.sailing = false;
-        return "\n\xE2\x9A\x93 Badly damaged, the ship limps into a quiet cove to patch up. `/repair` her (or let the carpenter work) and `/sail` again.";
+        return "\n⚓ Too damaged to sail. Anchored for repairs.";
     }
     if (g.sailing && g.ignoredEvents >= Tuning::AUTO_ANCHOR_AFTER) {
         g.sailing = false;
         g.ignoredEvents = 0;
-        return "\n\xE2\x9A\x93 Nobody answered the last " + std::to_string(Tuning::AUTO_ANCHOR_AFTER) +
-               " alarms, so the ship drops anchor to stay safe. Use `/sail` when the crew is back.";
+        return "\n⚓ " + std::to_string(Tuning::AUTO_ANCHOR_AFTER) + " alerts missed. Anchored" + DOT + "`/sail` to continue";
     }
     return "";
 }
@@ -907,22 +945,25 @@ std::string Game::endEvent(GuildState& g, int64_t now) {
 std::optional<Reply> Game::pulse(GuildState& g, int64_t now) {
     Event& e = g.event;
     if (e.kind == EventKind::Wreckage) return std::nullopt;
+    int sunkBefore = g.stats.timesSunk;
 
     if (e.isCombat()) {
         bool kraken = e.kind == EventKind::Kraken;
         e.nextPulseAt = now + Tuning::COMBAT_VOLLEY_EVERY;
-        std::string text = foeVolley(g, now);  // may sink us, which clears the event
+        std::string volley = foeVolley(g, now);  // may sink us, which clears the event
+        if (g.stats.timesSunk > sunkBefore) return reply("💀 Sunk", volley, Tone::Bad);
 
         // Pirates (and the Kraken) want our cargo, not a wreck: once we're badly holed they stop
-        // attacking and take what they can. That's a loss, but it means one missed alarm can't sink us.
+        // attacking and take what they can. That's a loss, but it means one missed alert can't sink us.
         const Ship& s = g.ship;
-        if (e.kind != EventKind::Merchant && g.event.active() && s.getHp() * 100 <= s.getMaxHp() * Tuning::BOARD_BELOW_PERCENT) {
+        if (e.kind != EventKind::Merchant && s.getHp() * 100 <= s.getMaxHp() * Tuning::BOARD_BELOW_PERCENT) {
             Reply taken = timeout(g, now);
-            taken.body = text + "\nWith our hull in splinters, they close in...\n\n" + taken.body;
+            taken.body = volley + "\n" + taken.body;
             return taken;
         }
-        if (g.event.active()) text += "Enemy: " + bar(e.foe.hp, e.foe.maxHp) + "  \xE2\x80\xA2  ends " + when(e.deadline);
-        return reply(kraken ? "\xF0\x9F\x90\x99 The Kraken strikes!" : "\xF0\x9F\x92\xA3 Incoming fire!", text, Tone::Bad);
+        return reply(kraken ? "🐙 Kraken attack" : "💣 Incoming",
+                     volley + "\nHull " + bar(s.getHp(), s.getMaxHp()) + "\nEnemy " + std::to_string(e.foe.hp) + "/" +
+                     std::to_string(e.foe.maxHp) + DOT + "ends " + when(e.deadline), Tone::Bad);
     }
 
     // Storm / fire
@@ -934,79 +975,51 @@ std::optional<Reply> Game::pulse(GuildState& g, int64_t now) {
         woodBurned = 1;
         g.ship.addWood(-1);
     }
+    std::string hit = "−" + std::to_string(damage) + " HP" + (woodBurned ? DOT + "−1 wood" : "");
+    if (g.ship.sunk()) return reply("💀 Sunk", hit + "\n" + sink(g, now), Tone::Bad);
 
-    std::string text = std::string(storm ? "A wave crashes over the deck" : "The fire spreads") + " (-" + std::to_string(damage) + " HP" +
-                       (woodBurned ? ", 1 wood burned" : "") + ").\nOur hull: " + bar(g.ship.getHp(), g.ship.getMaxHp()) + "\n";
-    if (g.ship.sunk()) {
-        text += "\n" + sink(g, now);
-    } else {
-        text += (storm ? "Water: " : "Flames: ") + bar(e.severity, e.startingSeverity) + "  \xE2\x80\xA2  ends " + when(e.deadline) +
-                "  \xE2\x80\xA2  " + (storm ? "`/bail`" : "`/douse`");
-    }
-    return reply(storm ? "\xF0\x9F\x8C\x8A The storm rages" : "\xF0\x9F\x94\xA5 The fire spreads", text, Tone::Bad);
+    return reply(storm ? "🌊 Storm" : "🔥 Fire",
+                 hit + "\nHull " + bar(g.ship.getHp(), g.ship.getMaxHp()) + "\n" + (storm ? "`/bail`" : "`/douse`") + DOT +
+                 "ends " + when(e.deadline), Tone::Bad);
 }
 
 // The event's time is up. The more the crew did, the less it hurts.
 Reply Game::timeout(GuildState& g, int64_t now) {
     Event e = g.event;  // copy: sink()/endEvent() clear g.event
     Ship& s = g.ship;
-    std::string text;
-    Tone tone = Tone::Bad;
-    std::string title;
 
     switch (e.kind) {
-    case EventKind::EnemyShip: {
-        // Plunder scales with how healthy the enemy still is
+    case EventKind::EnemyShip:
+    case EventKind::Kraken: {
+        // What they take scales with how healthy they still are
+        bool kraken = e.kind == EventKind::Kraken;
         double strength = static_cast<double>(e.foe.hp) / e.foe.maxHp;
-        int goldLost = static_cast<int>(std::lround(s.getGold() * 0.30 * strength));
-        int woodLost = static_cast<int>(std::lround(s.getWood() * 0.30 * strength));
+        int goldLost = static_cast<int>(std::lround(s.getGold() * (kraken ? 0.25 : 0.30) * strength));
+        int woodLost = static_cast<int>(std::lround(s.getWood() * (kraken ? 0.40 : 0.30) * strength));
         s.addGold(-goldLost);
         s.addWood(-woodLost);
-        title = "\xF0\x9F\x8F\xB4\xE2\x80\x8D\xE2\x98\xA0\xEF\xB8\x8F Boarded!";
-        text = e.foe.name + " grapples alongside and their crew swarms aboard. They make off with " + bold(std::to_string(goldLost) + " gold") +
-               " and " + bold(std::to_string(woodLost) + " wood") + ".";
-        if (strength < 0.5) text += "\nWe battered them badly, so they couldn't carry much.";
-        text += endEvent(g, now);
-        break;
+        return reply(kraken ? "🐙 Kraken gone" : "🏴‍☠️ Boarded",
+                     std::string(kraken ? "It took " : "They took ") + loot(goldLost, woodLost, "") + "." + endEvent(g, now), Tone::Bad);
     }
     case EventKind::Merchant:
-        title = "\xF0\x9F\x8C\x85 She got away";
-        text = e.foe.name + " disappears over the horizon with her cargo." + endEvent(g, now);
-        tone = Tone::Info;
-        break;
-    case EventKind::Kraken: {
-        double strength = static_cast<double>(e.foe.hp) / e.foe.maxHp;
-        int goldLost = static_cast<int>(std::lround(s.getGold() * 0.25 * strength));
-        int woodLost = static_cast<int>(std::lround(s.getWood() * 0.40 * strength));
-        s.addGold(-goldLost);
-        s.addWood(-woodLost);
-        title = "\xF0\x9F\x90\x99 The Kraken lets go";
-        text = "The Kraken loses interest - but its tentacles drag " + bold(std::to_string(goldLost) + " gold") + " and " +
-               bold(std::to_string(woodLost) + " wood") + " off the deck and into the deep.\nOur hull: " +
-               bar(s.getHp(), s.getMaxHp()) + endEvent(g, now);
-        break;
-    }
+        return reply("💨 Merchant escaped", bold(e.foe.name) + " got away." + endEvent(g, now));
     case EventKind::Storm:
     case EventKind::Fire: {
         bool storm = e.kind == EventKind::Storm;
         int damage = s.takeDamage(e.severity / 4);
         int woodLost = storm ? 0 : std::min(s.getWood(), e.severity / 10);
         s.addWood(-woodLost);
-        title = storm ? "\xF0\x9F\x8C\xA5\xEF\xB8\x8F The storm passes" : "\xF0\x9F\x94\xA5 The fire burns out";
-        text = std::string(storm ? "The last of the storm" : "The fire") + " does " + std::to_string(damage) + " damage on its way out" +
-               (woodLost ? " and burns " + std::to_string(woodLost) + " wood" : "") + ".\n";
-        text += s.sunk() ? sink(g, now) : "Our hull: " + bar(s.getHp(), s.getMaxHp()) + endEvent(g, now);
-        break;
+        std::string hit = "−" + std::to_string(damage) + " HP" + (woodLost ? DOT + "−" + std::to_string(woodLost) + " wood" : "");
+        if (s.sunk()) return reply("💀 Sunk", hit + "\n" + sink(g, now), Tone::Bad);
+        return reply(storm ? "🌤️ Storm over" : "🔥 Fire burnt out",
+                     hit + "\nHull " + bar(s.getHp(), s.getMaxHp()) + endEvent(g, now), Tone::Bad);
     }
     case EventKind::Wreckage:
-        title = "\xF0\x9F\x8C\x8A Drifted away";
-        text = "The rest of the wreckage drifts out of reach." + endEvent(g, now);
-        tone = Tone::Info;
-        break;
+        return reply("🌊 Wreckage gone", "It drifted away." + endEvent(g, now));
     case EventKind::None:
         break;
     }
-    return reply(title, text, tone);
+    return reply("", "");
 }
 
 std::vector<Announcement> Game::tick(int64_t now) {

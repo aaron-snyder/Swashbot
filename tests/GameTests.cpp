@@ -189,7 +189,7 @@ void testCombatVictory() {
     int reward = game->snapshot(GUILD).event.foe.goldReward;
 
     Reply r = game->command("fire", ctx(ALICE, T0 + 1));
-    CHECK(!r.ephemeral && contains(r.body, "Plunder"));
+    CHECK(!r.ephemeral && contains(r.title, "Victory"));
     GuildState g = game->snapshot(GUILD);
     CHECK(!g.event.active());
     CHECK(g.stats.victories == 1 && g.stats.lifetimeGold == reward);
@@ -240,7 +240,7 @@ void testEnemyVolleysAndSinking() {
         g.event.foe.hitBonus = 100;  // can't miss
     });
     std::vector<Announcement> out = game->tick(T0 + Tuning::COMBAT_FIRST_VOLLEY);
-    CHECK(out.size() == 1 && contains(out[0].message.body, "going down"));
+    CHECK(out.size() == 1 && contains(out[0].message.title, "Sunk"));
     GuildState g = game->snapshot(GUILD);
     CHECK(g.stats.timesSunk == 1 && !g.sailing && !g.event.active());
     CHECK(g.ship.getGold() == 120 && g.ship.getHp() == 40);
@@ -267,11 +267,11 @@ void testBadlyDamagedShipHeadsForCove() {
     game->startEvent(GUILD, EventKind::Wreckage, T0);
     game->edit(GUILD, [](GuildState& g) { g.ship.setHp(20); });
     std::vector<Announcement> out = game->tick(T0 + Tuning::BOUNTY_DURATION);
-    CHECK(out.size() == 1 && contains(out[0].message.body, "limps into a quiet cove"));
+    CHECK(out.size() == 1 && contains(out[0].message.body, "Too damaged to sail"));
     CHECK(!game->snapshot(GUILD).sailing);
 
     Reply r = game->command("sail", ctx(ALICE, T0 + Tuning::BOUNTY_DURATION));
-    CHECK(r.ephemeral && contains(r.body, "no state to sail"));
+    CHECK(r.ephemeral && contains(r.body, "Too damaged"));
     game->command("repair", ctx(ALICE, T0 + Tuning::BOUNTY_DURATION));  // 20 -> 40 HP
     CHECK(!game->command("sail", ctx(ALICE, T0 + Tuning::BOUNTY_DURATION)).ephemeral);
 }
@@ -292,7 +292,7 @@ void testFlee() {
     auto game = makeGame();
     game->startEvent(GUILD, EventKind::Merchant, T0);
     Reply r = game->command("flee", ctx(ALICE, T0));  // letting a merchant go always works
-    CHECK(contains(r.title, "Let them go") && !game->snapshot(GUILD).event.active());
+    CHECK(contains(r.title, "Let go") && !game->snapshot(GUILD).event.active());
 
     // Across many tries, some escapes succeed and some fail
     int escaped = 0;
@@ -418,17 +418,53 @@ void testScoreAndLeaderboard() {
     Reply board = game->command("leaderboard", ctx(ALICE, T0));
     size_t rival = board.body.find("Rival"), middle = board.body.find("Middling"), ours = board.body.find("Ours");
     CHECK(rival < middle && middle < ours);
-    CHECK(contains(board.body, "Ours** of *Test Server* - 10  \xE2\x86\x90 you"));
+    CHECK(contains(board.body, "**Ours** · 10 · *Test Server* ◀"));
 
     Reply fp = game->command("leaderboard", ctx(ALICE, T0), "firepower");
-    CHECK(contains(fp.title, "firepower"));
+    CHECK(contains(fp.title, "Firepower"));
 }
 
-void testRename() {
+void testAdminNaming() {
     auto game = makeGame();
-    game->command("rename", ctx(ALICE, T0), "  @everyone <@123> **Sea Dog**  ");
+    // Admins rename instantly, from any channel, and names are cleaned of pings and formatting
+    Reply r = game->nameShip(ctx(CAROL, T0, 9999), "  @everyone <@123> **Sea Dog**  ", true);
+    CHECK(r.ephemeral && contains(r.title, "Renamed"));
     CHECK(game->snapshot(GUILD).ship.getName() == "everyone 123 Sea Dog");
-    CHECK(game->command("rename", ctx(ALICE, T0), "@@@").ephemeral);
+    CHECK(game->nameShip(ctx(CAROL, T0), "@@@", true).ephemeral);
+}
+
+void testCrewNameVote() {
+    auto game = makeGame();
+    game->join(ctx(CAROL, T0));  // crew of 3: a name needs 2 ayes
+    std::string original = game->snapshot(GUILD).ship.getName();
+
+    CHECK(game->nameShip(ctx(ALICE, T0, 9999), "Salty Gull", false).ephemeral);  // proposals happen on deck
+    Reply r = game->nameShip(ctx(ALICE, T0), "Salty Gull", false);
+    CHECK(r.button.has_value() && contains(r.body, "Aye 1/2"));
+    int id = Game::parseVoteButtonId(r.button->id);
+    CHECK(id > 0 && Game::parseVoteButtonId("something-else") == 0);
+    CHECK(game->snapshot(GUILD).ship.getName() == original);
+
+    CHECK(game->nameShip(ctx(BOB, T0), "Other", false).ephemeral);       // one vote at a time
+    CHECK(game->voteOnName(ctx(ALICE, T0 + 1), id).ephemeral);           // proposer already voted
+    CHECK(game->voteOnName(ctx(99, T0 + 1), id).ephemeral);              // not crew
+
+    Reply done = game->voteOnName(ctx(BOB, T0 + 2), id);                 // 2/3 = half: passes
+    CHECK(done.editsOriginal && contains(done.title, "Renamed") && !done.button);
+    GuildState g = game->snapshot(GUILD);
+    CHECK(g.ship.getName() == "Salty Gull" && !g.nameVote.open(T0 + 2));
+    CHECK(game->voteOnName(ctx(CAROL, T0 + 3), id).editsOriginal);       // pressing an old button just closes it
+
+    // Votes expire
+    Reply slow = game->nameShip(ctx(BOB, T0 + 10), "Slow Boat", false);
+    Reply late = game->voteOnName(ctx(CAROL, T0 + 10 + Tuning::NAME_VOTE_DURATION), Game::parseVoteButtonId(slow.button->id));
+    CHECK(late.editsOriginal && contains(late.title, "closed"));
+    CHECK(game->snapshot(GUILD).ship.getName() == "Salty Gull");
+
+    // In a crew of two, the proposer alone is half
+    auto duo = makeGame();
+    Reply instant = duo->nameShip(ctx(ALICE, T0), "Twin Sails", false);
+    CHECK(contains(instant.title, "Renamed") && !instant.button && duo->snapshot(GUILD).ship.getName() == "Twin Sails");
 }
 
 void testPersistence() {
@@ -441,6 +477,10 @@ void testPersistence() {
             g.ship.setHull(Hull::Steel);
             g.stats.victories = 7;
             g.crew[ALICE].points = 99;
+            g.nameVote.id = 5;
+            g.nameVote.name = "Pending Name";
+            g.nameVote.ayes = { ALICE, BOB };
+            g.nameVote.closesAt = T0 + 999999;
         });
         game->startEvent(GUILD, EventKind::Kraken, T0);
         game->edit(GUILD, [](GuildState& g) { g.event.foe.hp = 77; });
@@ -456,6 +496,7 @@ void testPersistence() {
         CHECK(g.ship.getName() == "Persisted" && g.ship.getHull() == Hull::Steel && g.ship.getMaxHp() == 200);
         CHECK(g.stats.victories == 7 && g.crew.at(ALICE).points == 99 && g.crew.size() == 2);
         CHECK(g.event.kind == EventKind::Kraken && g.event.foe.hp == 77);
+        CHECK(g.nameVote.id == 5 && g.nameVote.name == "Pending Name" && g.nameVote.ayes.size() == 2);
         CHECK(g.event.deadline >= later + Tuning::RESUME_GRACE);
         CHECK(game->tick(later + 1).empty());  // no instant punishment
     }
@@ -514,7 +555,7 @@ void testCasualCrewSimulation() {
     for (int step = 0; step < 14 * 24 * 360; step++) {
         t += 10;
         for (const Announcement& a : game->tick(t)) {
-            if (contains(a.message.body, "drops anchor to stay safe")) autoAnchors++;
+            if (contains(a.message.body, "alerts missed")) autoAnchors++;
         }
         GuildState g = game->snapshot(GUILD);
         int hour = static_cast<int>((t / 3600) % 24);
@@ -567,7 +608,8 @@ int main() {
         { "hunt/raid/anchor", testHuntRaidAnchor },
         { "shop", testShop },
         { "score and leaderboard", testScoreAndLeaderboard },
-        { "rename", testRename },
+        { "admin naming", testAdminNaming },
+        { "crew name vote", testCrewNameVote },
         { "persistence", testPersistence },
         { "long simulation", testLongSimulation },
         { "casual crew simulation", testCasualCrewSimulation },

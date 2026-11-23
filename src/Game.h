@@ -16,6 +16,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -57,17 +58,26 @@ namespace Tuning {
     constexpr int SILVER_CANNON_PRICE = 500;
     constexpr int GOLD_CANNON_PRICE = 1400;
     constexpr int GUN_PRICE_PER_GUN = 150;          // next gun costs this * guns you have
+
+    constexpr int64_t NAME_VOTE_DURATION = 12 * 3600;  // a name vote stays open this long
 }
 
 enum class Tone { Info, Good, Bad, Alert };
 
-// A message for Discord. The bot layer turns it into an embed.
+// A message for Discord. The bot layer turns it into an embed (or plain text if there's no title).
 struct Reply {
+    struct Field { std::string name, value; };
+    struct Button { std::string id, label; };
+
     std::string title;
     std::string body;
+    std::string footer;
+    std::vector<Field> fields;     // shown side by side under the body
+    std::optional<Button> button;
     Tone tone = Tone::Info;
-    bool ephemeral = false;   // only the person who ran the command sees it
-    bool pingCrew = false;    // mention the crew role (something needs attention)
+    bool ephemeral = false;        // only the person who ran the command sees it
+    bool pingCrew = false;         // mention the crew role (something needs attention)
+    bool editsOriginal = false;    // button replies: replace the message the button was on
 };
 
 // A message the engine wants posted on its own (from tick), not as a command reply
@@ -121,6 +131,17 @@ struct CrewMember {
     int repairs = 0, hazardWork = 0, plunder = 0;
 };
 
+// A crew vote on a new ship name. Passes once at least half the crew says aye (the proposer counts).
+struct NameVote {
+    int id = 0;                    // 0 = no vote open
+    std::string name;
+    std::string proposerName;
+    std::set<uint64_t> ayes;
+    int64_t closesAt = 0;
+
+    bool open(int64_t now) const { return id != 0 && now < closesAt; }
+};
+
 // Everything about one Discord server's ship
 struct GuildState {
     uint64_t guildId = 0;
@@ -136,9 +157,13 @@ struct GuildState {
     int64_t nextDockRepairAt = 0;
     int ignoredEvents = 0;
     Event event;
+    NameVote nameVote;
+    int nextVoteId = 1;
 
     bool configured() const { return channelId != 0; }
     int crewCount() const;
+    int votesNeeded() const;       // half the crew, rounded up
+    int ayesFromCrew() const;      // ayes from people still aboard
     long long score() const;
 };
 
@@ -176,6 +201,12 @@ public:
     // --- Every other slash command. `arg` is the command's text option, `amount` its number option ---
     Reply command(const std::string& name, const Ctx& ctx, const std::string& arg = "", int64_t amount = 0);
 
+    // --- Naming the ship. Admins set it outright; crew members start a vote ---
+    Reply nameShip(const Ctx& ctx, const std::string& name, bool isAdmin);
+    Reply voteOnName(const Ctx& ctx, int voteId);    // someone pressed the "Aye" button
+    static std::string voteButtonId(int voteId);      // "vote:<id>"
+    static int parseVoteButtonId(const std::string& id);  // 0 if it isn't a vote button
+
     // --- The heartbeat. Call every few seconds; returns messages to post ---
     std::vector<Announcement> tick(int64_t now);
 
@@ -193,7 +224,8 @@ private:
     Reply leaderboard(const std::string& category, uint64_t guildId);
     Reply shop(GuildState& g);
     Reply help();
-    Reply rename(GuildState& g, const std::string& name);
+    Reply voteMessage(const GuildState& g, int64_t now);
+    void applyName(GuildState& g, const std::string& name);
     Reply sail(GuildState& g, const Ctx& c);
     Reply anchor(GuildState& g, const Ctx& c);
     Reply hunt(GuildState& g, const Ctx& c);

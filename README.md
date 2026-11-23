@@ -10,10 +10,9 @@ Every server gets its own ship. Members `/join` the crew, which gives them acces
 
 ```
 @Swashbot Crew
-⚔️ Enemy attack!
-Pirates! the Black Wake, a Steel hull ship with Iron cannons (3 guns), is bearing down on us!
-/fire to fight back • /repair to patch holes • /flee to run
-If they're still afloat in 8 minutes they'll board us and plunder the hold.
+⚔️ Pirates!
+the Black Wake · Steel · Iron · 3 guns
+/fire /repair /flee · they board in 8 minutes
 ```
 
 - Every `/fire` shoots one attack roll per gun (d20 + cannon bonus against the enemy's armor class), the same dice system as the original.
@@ -26,7 +25,7 @@ If they're still afloat in 8 minutes they'll board us and plunder the hold.
 | Who | Command | What it does |
 |---|---|---|
 | Admin | `/setup` | Repairs the ship channel and crew role. The bot builds them by itself when it joins a server |
-| Admin | `/rename <name>` | Names the ship |
+| Crew / Admin | `/name <name>` | Crew: proposes a name with an **Aye** button. It passes once half the crew votes aye (the proposer counts), and closes after 12 hours. Admins (Manage Server): renames instantly |
 | Anyone | `/join`, `/leave` | Sign on/off the crew (adds/removes the role) |
 | Anyone | `/status`, `/crew`, `/shop`, `/help` | Ship info, crew rankings, prices, help. Outside the ship channel only you see the reply |
 | Anyone | `/leaderboard [score\|gold\|firepower\|victories\|crew]` | Top ships across every server |

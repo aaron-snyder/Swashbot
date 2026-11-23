@@ -46,7 +46,15 @@ dpp::message toMessage(const Reply& r, uint64_t roleId = 0) {
     if (r.title.empty()) {
         m.set_content(r.body);
     } else {
-        m.add_embed(dpp::embed().set_title(r.title).set_description(r.body).set_color(colourFor(r.tone)));
+        dpp::embed e;
+        e.set_title(r.title).set_description(r.body).set_color(colourFor(r.tone));
+        for (const Reply::Field& f : r.fields) e.add_field(f.name, f.value, true);
+        if (!r.footer.empty()) e.set_footer(r.footer, "");
+        m.add_embed(e);
+    }
+    if (r.button) {
+        m.add_component(dpp::component().add_component(
+            dpp::component().set_type(dpp::cot_button).set_style(dpp::cos_success).set_label(r.button->label).set_id(r.button->id)));
     }
     if (r.pingCrew && roleId != 0) {
         m.set_content("<@&" + std::to_string(roleId) + ">" + (m.content.empty() ? "" : " " + m.content));
@@ -56,14 +64,21 @@ dpp::message toMessage(const Reply& r, uint64_t roleId = 0) {
     return m;
 }
 
-std::string displayName(const dpp::slashcommand_t& event) {
+// Works for slash commands and button clicks alike
+std::string displayName(const dpp::interaction_create_t& event) {
     std::string nick = event.command.member.get_nickname();
     if (!nick.empty()) return nick;
     const dpp::user& u = event.command.get_issuing_user();
     return u.global_name.empty() ? u.username : u.global_name;
 }
 
-Ctx contextOf(const dpp::slashcommand_t& event) {
+// Server owner, Administrator, or Manage Server
+bool isAdmin(const dpp::interaction_create_t& event) {
+    dpp::guild* g = dpp::find_guild(event.command.guild_id);
+    return g != nullptr && g->base_permissions(event.command.member).can(dpp::p_manage_guild);
+}
+
+Ctx contextOf(const dpp::interaction_create_t& event) {
     Ctx c;
     c.guildId = event.command.guild_id;
     c.channelId = event.command.channel_id;
@@ -96,7 +111,7 @@ std::string errorText(const dpp::confirmation_callback_t& cb) {
 // still exists is reused, and the channel's permissions are put back the way they should be.
 // ---------------------------------------------------------------------------
 const std::string PERMISSION_HELP =
-    "Make sure I have **Manage Channels** and **Manage Roles** (Server Settings \xE2\x86\x92 Roles \xE2\x86\x92 Swashbot), then run `/setup`.";
+    "Swashbot needs **Manage Channels** and **Manage Roles**, then run `/setup` again.";
 constexpr uint64_t CREW_PERMS = dpp::p_view_channel | dpp::p_send_messages | dpp::p_read_message_history;
 
 struct SetupResult {
@@ -139,7 +154,7 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
     {
         std::lock_guard<std::mutex> lock(setupMutex);
         if (!setupInProgress.insert(guildId).second) {
-            done({ false, "Setup is already running in this server - give it a moment." });
+            done({ false, "Setup is already running." });
             return;
         }
     }
@@ -161,10 +176,10 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
         if (roleIsNew) {
             std::vector<uint64_t> crew = game.crewIds(guildId);
             for (uint64_t userId : crew) bot.guild_member_add_role(guildId, userId, roleId);
-            if (!crew.empty()) fixed->push_back("gave the crew role back to " + std::to_string(crew.size()) + " sailor(s)");
+            if (!crew.empty()) fixed->push_back("restored the role for " + std::to_string(crew.size()) + " crew");
         }
-        std::string summary = fixed->empty() ? "Everything was already shipshape." : "Fixed: " + joinWithCommas(*fixed) + ".";
-        done({ true, summary + " The ship lives in <#" + std::to_string(channelId) + ">. Members use `/join` to see it." });
+        std::string summary = fixed->empty() ? "✅ All good" : "✅ " + joinWithCommas(*fixed);
+        done({ true, summary + " · <#" + std::to_string(channelId) + ">" });
     };
 
     // Step 2: the private ship channel (hidden from @everyone, visible to the crew role and the bot)
@@ -178,7 +193,8 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
               .set_permission_overwrite(bot.me.id, dpp::ot_member, CREW_PERMS | dpp::p_embed_links, 0);
             bot.channel_edit(ch, [ch, roleId, roleIsNew, guard, done, finish](const dpp::confirmation_callback_t& cb) {
                 if (cb.is_error()) {
-                    done({ false, "I couldn't update <#" + std::to_string(ch.id) + ">'s permissions: " + errorText(cb) + "\n" + PERMISSION_HELP });
+                    std::cout << "[swashbot] setup error: " << errorText(cb) << std::endl;
+                    done({ false, "❌ Couldn't update the channel. " + PERMISSION_HELP });
                     return;
                 }
                 finish(ch.id, roleId, false, roleIsNew);
@@ -195,10 +211,11 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
           .add_permission_overwrite(bot.me.id, dpp::ot_member, CREW_PERMS | dpp::p_embed_links, 0);
         bot.channel_create(ch, [roleId, roleIsNew, fixed, guard, done, finish](const dpp::confirmation_callback_t& cb) {
             if (cb.is_error()) {
-                done({ false, "I couldn't create the ship channel: " + errorText(cb) + "\n" + PERMISSION_HELP });
+                std::cout << "[swashbot] setup error: " << errorText(cb) << std::endl;
+                done({ false, "❌ Couldn't create the channel. " + PERMISSION_HELP });
                 return;
             }
-            fixed->push_back("created the ship channel");
+            fixed->push_back("made the channel");
             finish(cb.get<dpp::channel>().id, roleId, true, roleIsNew);
         });
     };
@@ -209,7 +226,7 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
         return;
     }
     if (dpp::snowflake leftover = findRoleByName(guildId, CREW_ROLE_NAME)) {
-        fixed->push_back("reconnected the existing crew role");
+        fixed->push_back("reconnected the crew role");
         ensureChannel(leftover, true);
         return;
     }
@@ -217,10 +234,11 @@ void setupGuild(dpp::cluster& bot, Game& game, dpp::snowflake guildId, SetupDone
     role.set_name(CREW_ROLE_NAME).set_guild_id(guildId).set_flags(dpp::r_mentionable).set_colour(0xC8A04A);
     bot.role_create(role, [fixed, guard, done, ensureChannel](const dpp::confirmation_callback_t& cb) {
         if (cb.is_error()) {
-            done({ false, "I couldn't create the crew role: " + errorText(cb) + "\n" + PERMISSION_HELP });
+            std::cout << "[swashbot] setup error: " << errorText(cb) << std::endl;
+            done({ false, "❌ Couldn't create the crew role. " + PERMISSION_HELP });
             return;
         }
-        fixed->push_back("created the crew role");
+        fixed->push_back("made the crew role");
         ensureChannel(cb.get<dpp::role>().id, true);
     });
 }
@@ -246,12 +264,13 @@ void handleJoin(dpp::cluster& bot, Game& game, const dpp::slashcommand_t& event)
     event.thinking(true);
     bot.guild_member_add_role(ctx.guildId, ctx.userId, info.roleId, [&bot, &game, event, ctx, info](const dpp::confirmation_callback_t& cb) {
         if (cb.is_error()) {
-            event.edit_original_response(dpp::message("I couldn't give you the crew role (" + errorText(cb) + ").\n"
-                                                       "An admin needs to give me **Manage Roles** and keep my role above **" + CREW_ROLE_NAME + "**."));
+            std::cout << "[swashbot] couldn't add crew role: " << errorText(cb) << std::endl;
+            event.edit_original_response(dpp::message("❌ Couldn't give you the crew role. Ask an admin to move the **Swashbot** "
+                                                      "role above **" + std::string(CREW_ROLE_NAME) + "**."));
             return;
         }
         event.edit_original_response(toMessage(game.join(ctx)));
-        bot.message_create(dpp::message(info.channelId, "\xE2\x9A\x93 <@" + std::to_string(ctx.userId) + "> has signed on to the crew!")
+        bot.message_create(dpp::message(info.channelId, "⚓ <@" + std::to_string(ctx.userId) + "> joined the crew.")
                                .set_allowed_mentions(true, false, false, false, {}, {}));
     });
 }
@@ -267,7 +286,7 @@ void handleLeave(dpp::cluster& bot, Game& game, const dpp::slashcommand_t& event
     event.thinking(true);
     bot.guild_member_remove_role(ctx.guildId, ctx.userId, info.roleId, [event, r](const dpp::confirmation_callback_t& cb) {
         Reply out = r;
-        if (cb.is_error()) out.body += "\n(I couldn't remove the crew role - " + errorText(cb) + ". An admin can remove it by hand.)";
+        if (cb.is_error()) out.body += " (Couldn't remove your role; an admin can.)";
         event.edit_original_response(toMessage(out));
     });
 }
@@ -280,26 +299,26 @@ std::vector<dpp::slashcommand> buildCommands(dpp::snowflake appId) {
     };
 
     std::vector<dpp::slashcommand> cmds = {
-        cmd("join", "Sign on to the crew and get access to the ship channel"),
+        cmd("join", "Join the crew"),
         cmd("leave", "Leave the crew"),
-        cmd("status", "Show the ship, cargo and what's happening"),
-        cmd("crew", "Who's pulling their weight on this ship"),
-        cmd("help", "List every Swashbot command"),
-        cmd("shop", "See upgrade and supply prices"),
-        cmd("sail", "Raise anchor - random events start happening"),
-        cmd("anchor", "Drop anchor - no random events until you sail again"),
-        cmd("hunt", "Go looking for an enemy ship to fight"),
-        cmd("raid", "Raid a nearby island for loot (it might be guarded)"),
-        cmd("fire", "Fire a broadside at the enemy"),
-        cmd("flee", "Try to escape the current fight"),
-        cmd("repair", "Patch the hull using 1 wood"),
-        cmd("bail", "Bail water out of the hold during a storm"),
-        cmd("douse", "Fight a fire aboard"),
-        cmd("salvage", "Haul floating wreckage aboard"),
+        cmd("status", "Ship status"),
+        cmd("crew", "Crew rankings"),
+        cmd("help", "All commands"),
+        cmd("shop", "Upgrade prices"),
+        cmd("sail", "Raise anchor (events start)"),
+        cmd("anchor", "Drop anchor (events stop)"),
+        cmd("hunt", "Find a fight"),
+        cmd("raid", "Raid an island for loot"),
+        cmd("fire", "Fire at the enemy"),
+        cmd("flee", "Escape a fight"),
+        cmd("repair", "Patch the hull (1 wood)"),
+        cmd("bail", "Bail water in a storm"),
+        cmd("douse", "Put out a fire"),
+        cmd("salvage", "Grab floating wreckage"),
     };
 
-    dpp::slashcommand leaderboard = cmd("leaderboard", "Top ships across every server");
-    leaderboard.add_option(dpp::command_option(dpp::co_string, "category", "What to rank by", false)
+    dpp::slashcommand leaderboard = cmd("leaderboard", "Top ships everywhere");
+    leaderboard.add_option(dpp::command_option(dpp::co_string, "category", "Rank by", false)
         .add_choice(dpp::command_option_choice("Score", std::string("score")))
         .add_choice(dpp::command_option_choice("Gold", std::string("gold")))
         .add_choice(dpp::command_option_choice("Firepower", std::string("firepower")))
@@ -307,25 +326,24 @@ std::vector<dpp::slashcommand> buildCommands(dpp::snowflake appId) {
         .add_choice(dpp::command_option_choice("Crew size", std::string("crew"))));
     cmds.push_back(leaderboard);
 
-    dpp::slashcommand buy = cmd("buy", "Spend the ship's gold");
+    dpp::slashcommand buy = cmd("buy", "Spend gold");
     buy.add_option(dpp::command_option(dpp::co_string, "item", "What to buy", true)
         .add_choice(dpp::command_option_choice("Wood", std::string("wood")))
         .add_choice(dpp::command_option_choice("Hull upgrade", std::string("hull")))
         .add_choice(dpp::command_option_choice("Cannon upgrade", std::string("cannons")))
         .add_choice(dpp::command_option_choice("Extra gun", std::string("gun"))));
-    buy.add_option(dpp::command_option(dpp::co_integer, "amount", "How much wood (default 5)", false)
+    buy.add_option(dpp::command_option(dpp::co_integer, "amount", "Wood amount (default 5)", false)
         .set_min_value(int64_t{ 1 }).set_max_value(int64_t{ 100 }));
     cmds.push_back(buy);
 
-    // Admin-only: Discord hides these from members without Manage Server
-    dpp::slashcommand setup = cmd("setup", "Re-run setup: rebuild a missing ship channel or crew role");
+    dpp::slashcommand name = cmd("name", "Propose a ship name (admins set it instantly)");
+    name.add_option(dpp::command_option(dpp::co_string, "name", "New name", true).set_max_length(int64_t{ 40 }));
+    cmds.push_back(name);
+
+    // Admin-only: Discord hides this from members without Manage Server
+    dpp::slashcommand setup = cmd("setup", "Repair the ship channel and crew role");
     setup.set_default_permissions(dpp::p_manage_guild);
     cmds.push_back(setup);
-
-    dpp::slashcommand rename = cmd("rename", "Give the ship a new name");
-    rename.set_default_permissions(dpp::p_manage_guild);
-    rename.add_option(dpp::command_option(dpp::co_string, "name", "The new name", true).set_max_length(int64_t{ 40 }));
-    cmds.push_back(rename);
 
     return cmds;
 }
@@ -361,9 +379,7 @@ int main() {
             std::cout << "[swashbot] auto-setup in guild " << guildId << ": " << r.summary << std::endl;
             // Let the server know the ship has arrived (only on success - no repeated error spam on restarts)
             if (r.ok && systemChannel != 0) {
-                bot.message_create(dpp::message(systemChannel,
-                    "\xF0\x9F\x8F\xB4\xE2\x80\x8D\xE2\x98\xA0\xEF\xB8\x8F **Swashbot has dropped anchor here!** "
-                    "Run `/join` to sign on to the crew and help run the server's pirate ship."));
+                bot.message_create(dpp::message(systemChannel, "🏴‍☠️ **Swashbot is here!** `/join` to crew the server's ship."));
             }
         });
     });
@@ -374,18 +390,31 @@ int main() {
         if (name == "join") return handleJoin(bot, game, event);
         if (name == "leave") return handleLeave(bot, game, event);
 
+        Ctx ctx = contextOf(event);
+        uint64_t roleId = game.setupInfo(ctx.guildId).roleId;
+        if (name == "name") {
+            event.reply(toMessage(game.nameShip(ctx, stringParam(event, "name"), isAdmin(event)), roleId));
+            return;
+        }
+
         std::string arg;
         int64_t amount = 0;
         if (name == "leaderboard") arg = stringParam(event, "category");
-        if (name == "rename") arg = stringParam(event, "name");
         if (name == "buy") {
             arg = stringParam(event, "item");
             amount = intParam(event, "amount");
         }
 
-        Ctx ctx = contextOf(event);
-        Reply r = game.command(name, ctx, arg, amount);
-        event.reply(toMessage(r, game.setupInfo(ctx.guildId).roleId));
+        event.reply(toMessage(game.command(name, ctx, arg, amount), roleId));
+    });
+
+    // The "Aye" button on a name vote
+    bot.on_button_click([&game](const dpp::button_click_t& event) {
+        int voteId = Game::parseVoteButtonId(event.custom_id);
+        if (voteId == 0) return;
+        Reply r = game.voteOnName(contextOf(event), voteId);
+        if (r.editsOriginal) event.reply(dpp::ir_update_message, toMessage(r));
+        else event.reply(toMessage(r));
     });
 
     bot.on_ready([&bot, &game](const dpp::ready_t&) {
